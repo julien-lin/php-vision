@@ -2,7 +2,7 @@
 
 [![PHP Version](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-116%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-137%20passed-success.svg)](tests/)
 
 [🇫🇷 Read in French](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -15,10 +15,11 @@ Vision combines simplicity with enterprise-grade performance through its **optio
 ## ✨ Key Features
 
 - 🚀 **Blazing Fast** - Optional compilation pipeline (0.5ms vs 17ms average)
+- ⚡ **Fragment Caching** - Cache components individually for 50-80% performance boost
 - 🔒 **Secure by Default** - Auto-escaping, path traversal protection, XSS prevention
 - 🎯 **Simple Syntax** - Variables `{{ var }}`, filters `|upper`, structures `{% if %}`
 - 🏗️ **Modular Architecture** - 7 independent modules (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Fully Tested** - 116 tests, 261 assertions, 100% functional coverage
+- 🧪 **Fully Tested** - 137 tests, 316 assertions, 100% functional coverage
 - 🎨 **Extensible** - Custom filters, functions, and processors
 - 📦 **Zero Dependencies** - Standalone, no external packages required
 - 💪 **PHP 8.0+** - Modern PHP with strict typing
@@ -87,6 +88,41 @@ $vision->setCacheManager(new CacheManager('/path/to/compiled-cache', 86400));
 $html = $vision->render('welcome', ['name' => 'Julien']);
 ```
 
+### Fragment Caching for Components ⚡
+
+Cache individual components to avoid re-rendering with identical props:
+
+```php
+<?php
+use JulienLinard\Vision\Vision;
+
+$vision = new Vision('/path/to/templates');
+
+// Enable fragment caching for components (50-80% faster)
+$vision->setFragmentCacheConfig(
+    enabled: true,
+    cacheDir: '/path/to/cache/fragments',
+    ttl: 3600  // 1 hour
+);
+
+// Components are automatically cached by name + props hash
+// First render: parses + renders + caches
+// Subsequent renders with same props: returns cached HTML
+echo $vision->renderString('{{ component("Button", buttonProps) }}', [
+    'buttonProps' => ['label' => 'Save', 'variant' => 'primary']
+]);
+```
+
+**CLI Management:**
+
+```bash
+# Clear fragment cache
+./vendor/bin/vision fragment:clear --cache=/path/to/cache/fragments
+
+# View fragment cache statistics
+./vendor/bin/vision fragment:stats --cache=/path/to/cache/fragments
+```
+
 ### Direct String Rendering
 
 ```php
@@ -129,7 +165,9 @@ Vision (Orchestrator)
 - ✅ **Custom Functions** - Register callable functions
 - ✅ **XSS Protection** - Auto-escaping enabled by default
 - ✅ **Smart Caching** - Multi-level with TTL and automatic invalidation
+- ✅ **Fragment Caching** - Cache components by props for massive performance gains
 - ✅ **Compilation** - Optional PHP compilation for extreme performance
+- ✅ **CLI Tools** - Cache management, compilation, and statistics commands
 
 ## 📖 Documentation
 

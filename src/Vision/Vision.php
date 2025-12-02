@@ -21,6 +21,7 @@ use JulienLinard\Vision\Filters\JsonFilter;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Cache\CacheManager;
+use JulienLinard\Vision\Cache\FragmentCache;
 use JulienLinard\Vision\Runtime\VariableResolver;
 use JulienLinard\Vision\Runtime\ControlStructureProcessor;
 use JulienLinard\Vision\Runtime\SafeString;
@@ -89,6 +90,7 @@ class Vision
     private ?TemplateParser $parser = null;
     private ?TemplateCompiler $compiler = null;
     private ?CacheManager $cacheManager = null;
+    private ?FragmentCache $fragmentCache = null;
     private VariableResolver $resolver;
 
     /**
@@ -146,6 +148,24 @@ class Vision
             if (!str_contains($name, '/')) {
                 $name = 'components/' . $name;
             }
+
+            // Fragment caching: vérifier le cache avant render
+            if ($this->fragmentCache !== null && $this->fragmentCache->isEnabled()) {
+                $cacheKey = $this->fragmentCache->generateKey($name, $props);
+                $cached = $this->fragmentCache->get($cacheKey);
+
+                if ($cached !== null) {
+                    return new SafeString($cached);
+                }
+
+                // Render et mettre en cache
+                $rendered = $this->render($name, $props);
+                $this->fragmentCache->set($cacheKey, $rendered);
+
+                return new SafeString($rendered);
+            }
+
+            // Pas de cache: render classique
             return new SafeString($this->render($name, $props));
         });
 
@@ -185,6 +205,23 @@ class Vision
     {
         $this->cacheManager = $cacheManager;
         return $this;
+    }
+
+    /**
+     * Injecte un FragmentCache optionnel pour le caching des composants
+     */
+    public function setFragmentCache(FragmentCache $fragmentCache): self
+    {
+        $this->fragmentCache = $fragmentCache;
+        return $this;
+    }
+
+    /**
+     * Récupère l'instance FragmentCache
+     */
+    public function getFragmentCache(): ?FragmentCache
+    {
+        return $this->fragmentCache;
     }
 
     /**
@@ -247,6 +284,32 @@ class Vision
             }
         }
 
+        return $this;
+    }
+
+    /**
+     * Configure le fragment cache pour les composants (méthode utilitaire)
+     *
+     * @param bool $enabled Activer le cache des fragments
+     * @param string|null $cacheDir Répertoire pour le cache (défaut: cacheDir/fragments)
+     * @param int $ttl Durée de validité en secondes (défaut: 3600)
+     * @return self
+     */
+    public function setFragmentCacheConfig(bool $enabled, ?string $cacheDir = null, int $ttl = 3600): self
+    {
+        if (!$enabled) {
+            $this->fragmentCache = null;
+            return $this;
+        }
+
+        // Utiliser un sous-répertoire du cache principal si non spécifié
+        if ($cacheDir === null && $this->cacheDir !== null) {
+            $cacheDir = $this->cacheDir . '/fragments';
+        } elseif ($cacheDir === null) {
+            throw new VisionException('Fragment cache directory must be specified');
+        }
+
+        $this->fragmentCache = new FragmentCache($cacheDir, $ttl, true);
         return $this;
     }
 

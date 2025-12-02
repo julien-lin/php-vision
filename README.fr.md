@@ -2,7 +2,7 @@
 
 [![Version PHP](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![Licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-116%20r%C3%A9ussis-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-137%20r%C3%A9ussis-success.svg)](tests/)
 
 [🇫🇷 Lire en français](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -15,10 +15,11 @@ Vision allie simplicité et performance de niveau entreprise grâce à son **pip
 ## ✨ Fonctionnalités Clés
 
 - 🚀 **Ultra Rapide** - Pipeline de compilation optionnel (0,5ms vs 17ms en moyenne)
+- ⚡ **Cache de Fragments** - Cache les composants individuellement pour 50-80% de gain
 - 🔒 **Sécurisé par Défaut** - Échappement automatique, protection path traversal, prévention XSS
 - 🎯 **Syntaxe Simple** - Variables `{{ var }}`, filtres `|upper`, structures `{% if %}`
 - 🏗️ **Architecture Modulaire** - 7 modules indépendants (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Entièrement Testé** - 116 tests, 261 assertions, couverture fonctionnelle 100%
+- 🧪 **Entièrement Testé** - 137 tests, 316 assertions, couverture fonctionnelle 100%
 - 🎨 **Extensible** - Filtres, fonctions et processeurs personnalisés
 - 📦 **Zéro Dépendance** - Autonome, aucun package externe requis
 - 💪 **PHP 8.0+** - PHP moderne avec typage strict
@@ -87,6 +88,41 @@ $vision->setCacheManager(new CacheManager('/chemin/vers/cache-compile', 86400));
 $html = $vision->render('welcome', ['name' => 'Julien']);
 ```
 
+### Cache de Fragments pour Composants ⚡
+
+Cachez les composants individuellement pour éviter de re-rendre avec des props identiques :
+
+```php
+<?php
+use JulienLinard\Vision\Vision;
+
+$vision = new Vision('/chemin/vers/templates');
+
+// Activer le cache de fragments pour composants (50-80% plus rapide)
+$vision->setFragmentCacheConfig(
+    enabled: true,
+    cacheDir: '/chemin/vers/cache/fragments',
+    ttl: 3600  // 1 heure
+);
+
+// Les composants sont automatiquement cachés par nom + hash des props
+// Premier rendu : parse + render + cache
+// Rendus suivants avec mêmes props : retourne le HTML caché
+echo $vision->renderString('{{ component("Button", buttonProps) }}', [
+    'buttonProps' => ['label' => 'Enregistrer', 'variant' => 'primary']
+]);
+```
+
+**Gestion CLI :**
+
+```bash
+# Nettoyer le cache des fragments
+./vendor/bin/vision fragment:clear --cache=/chemin/vers/cache/fragments
+
+# Voir les statistiques du cache des fragments
+./vendor/bin/vision fragment:stats --cache=/chemin/vers/cache/fragments
+```
+
 ### Rendu Direct d'une Chaîne
 
 ```php
@@ -129,7 +165,9 @@ Vision (Orchestrateur)
 - ✅ **Fonctions Personnalisées** - Enregistrement de fonctions callable
 - ✅ **Protection XSS** - Échappement automatique activé par défaut
 - ✅ **Cache Intelligent** - Multi-niveaux avec TTL et invalidation automatique
+- ✅ **Cache de Fragments** - Cache les composants par props pour gains massifs
 - ✅ **Compilation** - Compilation PHP optionnelle pour performances extrêmes
+- ✅ **Outils CLI** - Gestion du cache, compilation et commandes statistiques
 
 ## 📖 Documentation
 
