@@ -1,0 +1,810 @@
+<?php
+
+declare(strict_types=1);
+
+namespace JulienLinard\Vision;
+
+use JulienLinard\Vision\Exception\InvalidFilterException;
+use JulienLinard\Vision\Exception\TemplateNotFoundException;
+use JulienLinard\Vision\Exception\VisionException;
+use JulienLinard\Vision\Filters\FilterInterface;
+use JulienLinard\Vision\Filters\FilterManager;
+use JulienLinard\Vision\Filters\UpperFilter;
+use JulienLinard\Vision\Filters\LowerFilter;
+use JulienLinard\Vision\Filters\TrimFilter;
+use JulienLinard\Vision\Filters\EscapeFilter;
+use JulienLinard\Vision\Filters\DefaultFilter;
+use JulienLinard\Vision\Filters\DateFormatFilter;
+use JulienLinard\Vision\Filters\NumberFormatFilter;
+use JulienLinard\Vision\Filters\LengthFilter;
+use JulienLinard\Vision\Filters\JsonFilter;
+use JulienLinard\Vision\Parser\TemplateParser;
+use JulienLinard\Vision\Compiler\TemplateCompiler;
+use JulienLinard\Vision\Cache\CacheManager;
+use JulienLinard\Vision\Runtime\VariableResolver;
+use JulienLinard\Vision\Runtime\ControlStructureProcessor;
+
+/**
+ * Moteur de template Vision
+ */
+class Vision
+{
+    /**
+     * Patterns regex précompilés pour améliorer les performances
+     * Optimisés pour éviter ReDoS (limiter backtracking)
+     */
+    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/]+?)\s*\}\}/';
+    private const PATTERN_CONDITION_OPERATOR = '/^(\w+(?:\.\w+){0,10})\s*(==|!=|>=|<=|>|<)\s*([\w\s"\'.-]{0,200})$/';
+    private const PATTERN_CONDITION_VARIABLE = '/^(\w+(?:\.\w+){0,10})$/';
+    private const PATTERN_CONDITION_NEGATION = '/^!\s*(\w+(?:\.\w+){0,10})$/';
+    private const PATTERN_QUOTED_STRING = '/^["\'](.{0,1000})["\']$/';
+
+    /**
+     * Limites de sécurité
+     */
+    private const MAX_RECURSION_DEPTH = 50;
+    private const MAX_TEMPLATE_SIZE = 10485760; // 10MB
+    
+
+    /**
+     * @var string Chemin vers le répertoire des templates
+     */
+    private string $templateDir;
+
+    /**
+     * Gestionnaire de filtres
+     */
+    private FilterManager $filterManager;
+
+    /**
+     * @var array<string, callable> Fonctions personnalisées
+     */
+    private array $functions = [];
+
+    /**
+     * @var bool Activer l'échappement automatique HTML
+     */
+    private bool $autoEscape = true;
+
+    /**
+     * @var bool Activer le cache
+     */
+    private bool $cacheEnabled = false;
+
+    /**
+     * @var string|null Répertoire pour le cache
+     */
+    private ?string $cacheDir = null;
+
+    /**
+     * @var int Durée de validité du cache en secondes (TTL)
+     */
+    private int $cacheTTL = 3600; // 1 heure par défaut
+
+
+    /**
+     * Intégrations optionnelles (Parser/Compiler/CacheManager)
+     */
+    private ?TemplateParser $parser = null;
+    private ?TemplateCompiler $compiler = null;
+    private ?CacheManager $cacheManager = null;
+    private VariableResolver $resolver;
+
+    /**
+     * Constructeur
+     *
+     * @param string $templateDir Chemin vers le répertoire des templates
+     * @param bool $autoEscape Activer l'échappement automatique HTML
+     */
+    public function __construct(string $templateDir = '', bool $autoEscape = true)
+    {
+        $this->templateDir = rtrim($templateDir, '/');
+        $this->autoEscape = $autoEscape;
+        $this->filterManager = new FilterManager();
+        $this->resolver = new VariableResolver();
+        $this->registerDefaultFilters();
+    }
+
+    /**
+     * Enregistre les filtres par défaut
+     */
+    private function registerDefaultFilters(): void
+    {
+        $this->registerFilter(new UpperFilter());
+        $this->registerFilter(new LowerFilter());
+        $this->registerFilter(new TrimFilter());
+        $this->registerFilter(new EscapeFilter());
+        $this->registerFilter(new DefaultFilter());
+        $this->registerFilter(new DateFormatFilter());
+        $this->registerFilter(new NumberFormatFilter());
+        $this->registerFilter(new LengthFilter());
+        $this->registerFilter(new JsonFilter());
+    }
+
+    /**
+     * Injecte un TemplateParser optionnel
+     */
+    public function setParser(TemplateParser $parser): self
+    {
+        $this->parser = $parser;
+        return $this;
+    }
+
+    /**
+     * Injecte un TemplateCompiler optionnel
+     */
+    public function setCompiler(TemplateCompiler $compiler): self
+    {
+        $this->compiler = $compiler;
+        return $this;
+    }
+
+    /**
+     * Injecte un CacheManager optionnel
+     */
+    public function setCacheManager(CacheManager $cacheManager): self
+    {
+        $this->cacheManager = $cacheManager;
+        return $this;
+    }
+
+    /**
+     * Enregistre un filtre personnalisé
+     *
+     * @param FilterInterface $filter
+     * @return self
+     */
+    public function registerFilter(FilterInterface $filter): self
+    {
+        $this->filterManager->addFilter($filter);
+        return $this;
+    }
+
+    /**
+     * Enregistre une fonction personnalisée
+     *
+     * @param string $name Nom de la fonction
+     * @param callable $callback
+     * @return self
+     */
+    public function registerFunction(string $name, callable $callback): self
+    {
+        $this->functions[$name] = $callback;
+        return $this;
+    }
+
+    /**
+     * Active ou désactive l'échappement automatique
+     *
+     * @param bool $enabled
+     * @return self
+     */
+    public function setAutoEscape(bool $enabled): self
+    {
+        $this->autoEscape = $enabled;
+        return $this;
+    }
+
+    /**
+     * Active ou désactive le cache
+     *
+     * @param bool $enabled
+     * @param string|null $cacheDir Répertoire pour le cache
+     * @param int $ttl Durée de validité du cache en secondes (défaut: 3600)
+     * @return self
+     */
+    public function setCache(bool $enabled, ?string $cacheDir = null, int $ttl = 3600): self
+    {
+        $this->cacheEnabled = $enabled;
+        $this->cacheTTL = $ttl;
+        
+        if ($cacheDir !== null) {
+            $this->cacheDir = rtrim($cacheDir, '/\\');
+            // Créer le répertoire de cache s'il n'existe pas
+            if (!is_dir($this->cacheDir)) {
+                if (!mkdir($this->cacheDir, 0755, true) && !is_dir($this->cacheDir)) {
+                    throw new VisionException("Impossible de créer le répertoire de cache: {$this->cacheDir}");
+                }
+            }
+        }
+        
+        return $this;
+    }
+
+    /**
+     * Nettoie le cache (supprime les fichiers expirés)
+     *
+     * @param int|null $maxAge Age maximum en secondes (null = utiliser TTL, 0 = tout supprimer)
+     * @return int Nombre de fichiers supprimés
+     */
+    public function clearCache(?int $maxAge = null): int
+    {
+        if ($this->cacheDir === null || !is_dir($this->cacheDir)) {
+            return 0;
+        }
+
+        $maxAge = $maxAge ?? $this->cacheTTL;
+        $now = time();
+        $deleted = 0;
+
+        $files = glob($this->cacheDir . '/*.cache');
+        if ($files === false) {
+            return 0;
+        }
+
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                // Si maxAge = 0, supprimer tous les fichiers
+                // Sinon, vérifier l'âge
+                if ($maxAge === 0 || ($now - filemtime($file)) > $maxAge) {
+                    @unlink($file);
+                    $deleted++;
+                }
+            }
+        }
+
+        return $deleted;
+    }
+
+    /**
+     * Rend un template avec des variables
+     *
+     * @param string $template Nom du template (sans extension)
+     * @param array<string, mixed> $variables Variables à passer au template
+     * @return string Le contenu rendu
+     * @throws TemplateNotFoundException
+     * @throws VisionException
+     */
+    public function render(string $template, array $variables = []): string
+    {
+        $templatePath = $this->getTemplatePath($template);
+
+        if (!file_exists($templatePath)) {
+            throw new TemplateNotFoundException($template);
+        }
+
+        // Pipeline compilé optionnel (Parser + Compiler + CacheManager)
+        if ($this->parser !== null && $this->compiler !== null && $this->cacheManager !== null && $this->cacheEnabled) {
+            // Essayer de charger un template compilé depuis le cache
+            $compiled = $this->cacheManager->getCompiled($templatePath);
+
+            if ($compiled === null) {
+                // Lire et parser
+                $content = file_get_contents($templatePath);
+                if ($content === false) {
+                    throw new VisionException("Impossible de lire le template : {$template}");
+                }
+                $parsed = $this->parser->parse($content);
+                $compiled = $this->compiler->compile($parsed);
+                // Sauvegarder en cache
+                $this->cacheManager->saveCompiled($templatePath, $compiled);
+            }
+
+            // Exécuter avec helpers connectés à cette instance
+            $helpers = [
+                'resolveVariable' => function (string $path, array $vars) {
+                    return $this->getNestedValue($vars, $path);
+                },
+                'applyFilter' => function (string $filterExpression, mixed $value) {
+                    return $this->applyFilter($filterExpression, $value);
+                },
+                'evaluateCondition' => function (string $condition, array $vars) {
+                    return $this->evaluateCondition($condition, $vars);
+                },
+            ];
+
+            return $compiled->execute($variables, $helpers);
+        }
+
+        // Fallback: pipeline historique (cache de rendu par fichier)
+        if ($this->cacheEnabled && $this->cacheDir !== null) {
+            $cached = $this->getCachedContent($templatePath, $variables);
+            if ($cached !== null) {
+                return $cached;
+            }
+        }
+
+        $content = file_get_contents($templatePath);
+        if ($content === false) {
+            throw new VisionException("Impossible de lire le template : {$template}");
+        }
+
+        $rendered = $this->renderString($content, $variables);
+
+        // Sauvegarder dans le cache si activé
+        if ($this->cacheEnabled && $this->cacheDir !== null) {
+            $this->saveCachedContent($templatePath, $variables, $rendered);
+        }
+
+        return $rendered;
+    }
+
+    /**
+     * Rend une chaîne de template directement
+     *
+     * @param string $content Contenu du template
+     * @param array<string, mixed> $variables Variables à passer au template
+     * @param int $depth Profondeur de récursion actuelle
+     * @return string Le contenu rendu
+     * @throws VisionException Si la profondeur maximale est atteinte
+     */
+    public function renderString(string $content, array $variables = [], int $depth = 0): string
+    {
+        // Vérifier la limite de récursion
+        if ($depth > self::MAX_RECURSION_DEPTH) {
+            throw new VisionException(
+                "Profondeur de récursion maximale atteinte (" . self::MAX_RECURSION_DEPTH . "). " .
+                "Vérifiez vos templates pour des boucles ou conditions imbriquées trop profondes."
+            );
+        }
+
+        // Traiter les structures de contrôle
+        $content = $this->processControlStructures($content, $variables, $depth);
+
+        // Traiter les variables et filtres
+        $content = $this->processVariables($content, $variables);
+
+        return $content;
+    }
+
+    /**
+     * Traite les structures de contrôle (if, for, etc.)
+     *
+     * @param string $content
+     * @param array<string, mixed> $variables
+     * @param int $depth Profondeur de récursion actuelle
+     * @return string
+     */
+    private function processControlStructures(string $content, array $variables, int $depth): string
+    {
+        $processor = new ControlStructureProcessor();
+        return $processor->process(
+            $content,
+            $variables,
+            $depth,
+            fn(string $c, array $v, int $d) => $this->renderString($c, $v, $d),
+            fn(string $cond, array $v) => $this->evaluateCondition($cond, $v),
+            fn(array $v, string $path) => $this->getNestedValue($v, $path),
+        );
+    }
+
+    /**
+     * Évalue une condition
+     *
+     * @param string $condition
+     * @param array<string, mixed> $variables
+     * @return bool
+     */
+    private function evaluateCondition(string $condition, array $variables): bool
+    {
+        // Support pour les valeurs littérales true/false
+        if ($condition === 'true') {
+            return true;
+        }
+        if ($condition === 'false') {
+            return false;
+        }
+
+        // Support pour les opérateurs simples
+        if (preg_match(self::PATTERN_CONDITION_OPERATOR, $condition, $matches)) {
+            $var = $this->getNestedValue($variables, $matches[1]);
+            $operator = $matches[2];
+            $compareValue = trim($matches[3], '\'"');
+
+            // Conversion automatique en numérique si les deux valeurs semblent numériques
+            if (is_numeric($var) && is_numeric($compareValue)) {
+                $var = (float)$var;
+                $compareValue = (float)$compareValue;
+            }
+
+            return match ($operator) {
+                '==' => $var == $compareValue,
+                '!=' => $var != $compareValue,
+                '>' => $var > $compareValue,
+                '<' => $var < $compareValue,
+                '>=' => $var >= $compareValue,
+                '<=' => $var <= $compareValue,
+                default => false,
+            };
+        }
+
+        // Variable simple
+        if (preg_match(self::PATTERN_CONDITION_VARIABLE, $condition, $matches)) {
+            $value = $this->getNestedValue($variables, $matches[1]);
+            // Un tableau ou objet non vide est truthy
+            if (is_array($value)) {
+                return !empty($value);
+            }
+            if (is_object($value)) {
+                return true;
+            }
+            return !empty($value) || $value === 0 || $value === '0';
+        }
+
+        // Négation
+        if (preg_match(self::PATTERN_CONDITION_NEGATION, $condition, $matches)) {
+            $value = $this->getNestedValue($variables, $matches[1]);
+            // Pour la négation, un tableau ou objet non vide est falsy (car on inverse)
+            if (is_array($value)) {
+                return empty($value);
+            }
+            if (is_object($value)) {
+                return false;
+            }
+            return empty($value) && $value !== 0 && $value !== '0';
+        }
+
+        return false;
+    }
+
+    /**
+     * Traite les variables et filtres dans le contenu
+     *
+     * @param string $content
+     * @param array<string, mixed> $variables
+     * @return string
+     */
+    private function processVariables(string $content, array $variables): string
+    {
+        return preg_replace_callback(
+            self::PATTERN_VARIABLE,
+            function ($matches) use ($variables) {
+                $expression = trim($matches[1]);
+                return $this->evaluateExpression($expression, $variables);
+            },
+            $content
+        );
+    }
+
+    /**
+     * Évalue une expression (variable avec filtres)
+     *
+     * @param string $expression
+     * @param array<string, mixed> $variables
+     * @return string
+     */
+    private function evaluateExpression(string $expression, array $variables): string
+    {
+        // Détecter si c'est une fonction (pattern plus permissif pour capturer tous les cas)
+        if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*|.+?)\((.*?)\)$/', $expression, $funcMatches)) {
+            $funcName = $funcMatches[1];
+            
+            // Valider le nom de fonction pour la sécurité (seulement lettres, chiffres et underscore)
+            if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $funcName)) {
+                // Message générique en production
+                throw new VisionException("Invalid function call in template");
+            }
+            
+            $params = $this->parseFunctionParams($funcMatches[2], $variables);
+
+            if (isset($this->functions[$funcName])) {
+                $result = call_user_func_array($this->functions[$funcName], $params);
+                return $this->formatValue($result);
+            }
+            
+            // Si la fonction n'existe pas, retourner une chaîne vide plutôt que l'expression
+            return '';
+        }
+
+        // Parser les filtres (variable|filter1|filter2:param)
+        $parts = explode('|', $expression);
+        $variablePart = trim(array_shift($parts) ?? '');
+
+        // Obtenir la valeur de la variable
+        $value = $this->getNestedValue($variables, $variablePart);
+
+        // Déterminer si un filtre "safe" a été appliqué (qui ne nécessite pas d'échappement)
+        $safeFilters = ['escape', 'json', 'number'];
+        $hasSafeFilter = false;
+
+        // Appliquer les filtres
+        foreach ($parts as $filterPart) {
+            $filterName = trim(explode(':', $filterPart, 2)[0]);
+            if (in_array($filterName, $safeFilters, true)) {
+                $hasSafeFilter = true;
+            }
+            $value = $this->applyFilter($filterPart, $value);
+        }
+
+        // Échappement automatique si activé et aucun filtre safe n'a été appliqué
+        if ($this->autoEscape && is_string($value) && !$hasSafeFilter) {
+            // Utiliser l'API centrale pour appliquer le filtre afin d'éviter les erreurs de typage
+            $value = $this->applyFilter('escape', $value);
+        }
+
+        return $this->formatValue($value);
+    }
+
+    /**
+     * Applique un filtre à une valeur
+     *
+     * @param string $filterExpression Expression du filtre (ex: "upper", "date:Y-m-d")
+     * @param mixed $value
+     * @return mixed
+     * @throws InvalidFilterException
+     */
+    private function applyFilter(string $filterExpression, mixed $value): mixed
+    {
+        return $this->filterManager->apply(trim($filterExpression), $value);
+    }
+
+
+    /**
+     * Parse les paramètres d'une fonction
+     *
+     * @param string $paramsString
+     * @param array<string, mixed> $variables
+     * @return array
+     */
+    private function parseFunctionParams(string $paramsString, array $variables): array
+    {
+        if (empty(trim($paramsString))) {
+            return [];
+        }
+
+        $params = [];
+        $parts = explode(',', $paramsString);
+        foreach ($parts as $part) {
+            $part = trim($part);
+            // Si c'est une chaîne entre guillemets
+            if (preg_match(self::PATTERN_QUOTED_STRING, $part, $matches)) {
+                $params[] = $matches[1];
+            } elseif (is_numeric($part)) {
+                $params[] = str_contains($part, '.') ? (float)$part : (int)$part;
+            } else {
+                // Variable
+                $params[] = $this->getNestedValue($variables, $part);
+            }
+        }
+        return $params;
+    }
+
+    /**
+     * Obtient une valeur imbriquée depuis un tableau (ex: "user.name")
+     *
+     * @param array<string, mixed> $variables
+     * @param string $path
+     * @return mixed
+     */
+    private function getNestedValue(array $variables, string $path): mixed
+    {
+        return $this->resolver->resolve($variables, $path);
+    }
+
+    /**
+     * Formate une valeur pour l'affichage
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private function formatValue(mixed $value): string
+    {
+        return $this->resolver->format($value);
+    }
+
+    /**
+     * Obtient le chemin complet vers un template
+     *
+     * @param string $template
+     * @return string
+     */
+    /**
+     * Obtient le filtre d'échappement (singleton)
+     *
+     * @return EscapeFilter
+     */
+    private function getEscapeFilter(): EscapeFilter
+    {
+        return $this->filterManager->getEscapeFilter();
+    }
+
+    private function getTemplatePath(string $template): string
+    {
+        // Validation stricte: interdire tout caractère de traversée
+        if (preg_match('#\.\.|[\\/]{2,}|[\x00-\x1f]#', $template)) {
+            throw new TemplateNotFoundException($template);
+        }
+        
+        // Ajouter extension si absente
+        if (!str_contains($template, '.php') && !str_contains($template, '.html')) {
+            $template .= '.php';
+        }
+
+        if ($this->templateDir) {
+            // Résoudre le chemin de base AVANT
+            $realBasePath = realpath($this->templateDir);
+            if ($realBasePath === false || !is_dir($realBasePath)) {
+                throw new VisionException("Template directory invalid: {$this->templateDir}");
+            }
+            
+            // Construire le chemin sans permettre de sortir
+            $fullPath = $realBasePath . DIRECTORY_SEPARATOR . ltrim($template, '\\/');
+            
+            // Résoudre le chemin final
+            $realFullPath = realpath($fullPath);
+            
+            // Vérifier que le fichier existe ET est dans le répertoire autorisé
+            if ($realFullPath === false || !is_file($realFullPath)) {
+                throw new TemplateNotFoundException($template);
+            }
+            
+            // Protection stricte: le chemin doit commencer par le base path
+            if (strpos($realFullPath, $realBasePath . DIRECTORY_SEPARATOR) !== 0) {
+                throw new TemplateNotFoundException($template);
+            }
+            
+            return $realFullPath;
+        }
+
+        return $template;
+    }
+
+    /**
+     * Récupère le contenu depuis le cache si valide
+     *
+     * @param string $templatePath Chemin complet vers le template
+     * @param array<string, mixed> $variables Variables du template
+     * @return string|null Contenu en cache ou null si invalide/inexistant
+     */
+    private function getCachedContent(string $templatePath, array $variables): ?string
+    {
+        $cacheFile = $this->getCacheFilePath($templatePath, $variables);
+
+        if (!file_exists($cacheFile)) {
+            return null;
+        }
+
+        $cacheMTime = filemtime($cacheFile);
+        $now = time();
+
+        // Vérifier le TTL
+        if (($now - $cacheMTime) >= $this->cacheTTL) {
+            @unlink($cacheFile);
+            return null;
+        }
+
+        // Vérifier si le template source a changé
+        $templateMTime = file_exists($templatePath) ? filemtime($templatePath) : 0;
+        if ($templateMTime > $cacheMTime) {
+            @unlink($cacheFile);
+            return null;
+        }
+
+        // Lire le cache avec verrouillage en lecture partagée
+        $fp = @fopen($cacheFile, 'rb');
+        if ($fp === false) {
+            return null;
+        }
+
+        // FIX: Verrouillage BLOQUANT avec timeout pour éviter race conditions
+        $startTime = time();
+        $timeout = 5; // 5 secondes max
+        
+        while (!flock($fp, LOCK_SH)) {
+            if (time() - $startTime > $timeout) {
+                fclose($fp);
+                return null; // Timeout, régénérer
+            }
+            usleep(50000); // Attendre 50ms avant de réessayer
+        }
+
+        $content = stream_get_contents($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+
+        return $content !== false ? $content : null;
+    }
+
+    /**
+     * Sauvegarde le contenu dans le cache
+     *
+     * @param string $templatePath Chemin complet vers le template
+     * @param array<string, mixed> $variables Variables du template
+     * @param string $content Contenu rendu à mettre en cache
+     * @return void
+     */
+    private function saveCachedContent(string $templatePath, array $variables, string $content): void
+    {
+        if ($this->cacheDir === null) {
+            return;
+        }
+
+        $cacheFile = $this->getCacheFilePath($templatePath, $variables);
+
+        // Créer le dossier si nécessaire
+        $cacheDir = dirname($cacheFile);
+        if (!is_dir($cacheDir)) {
+            if (!mkdir($cacheDir, 0755, true) && !is_dir($cacheDir)) {
+                // Échec silencieux pour ne pas bloquer le rendu
+                return;
+            }
+        }
+
+        // Écrire avec verrouillage exclusif
+        $fp = @fopen($cacheFile, 'cb');
+        if ($fp === false) {
+            // Échec silencieux pour ne pas bloquer le rendu
+            return;
+        }
+
+        // FIX: Verrouillage BLOQUANT avec timeout
+        $startTime = time();
+        $timeout = 5;
+        
+        while (!flock($fp, LOCK_EX)) {
+            if (time() - $startTime > $timeout) {
+                fclose($fp);
+                return; // Timeout, abandonner
+            }
+            usleep(50000); // Attendre 50ms
+        }
+        
+        ftruncate($fp, 0);
+        fwrite($fp, $content);
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+    }
+
+    /**
+     * Génère le chemin du fichier de cache
+     *
+     * @param string $templatePath Chemin complet vers le template
+     * @param array<string, mixed> $variables Variables du template
+     * @return string Chemin complet du fichier de cache
+     */
+    private function getCacheFilePath(string $templatePath, array $variables): string
+    {
+        // SÉCURITÉ: Valider les types des variables pour éviter object injection
+        $this->validateCacheVariables($variables);
+        
+        // Inclure le timestamp du template dans le hash pour invalidation automatique
+        $templateMTime = file_exists($templatePath) ? filemtime($templatePath) : 0;
+
+        // Créer un hash basé sur le template et les variables
+        // Les variables sont sérialisées pour créer un hash unique
+        $hashData = [
+            'template' => $templatePath,
+            'template_mtime' => $templateMTime,
+            'auto_escape' => $this->autoEscape,
+            'variables' => $variables,
+        ];
+
+        // Utiliser sha256 pour éviter les collisions
+        $json = json_encode($hashData, JSON_THROW_ON_ERROR);
+        $hash = hash('sha256', $json);
+        // Limiter la longueur du hash pour des noms de fichiers plus courts
+        $hash = substr($hash, 0, 32);
+
+        // Nettoyer le nom du template pour le nom de fichier
+        $templateName = basename($templatePath, '.php');
+        $templateName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $templateName);
+
+        $cacheKey = $templateName . '_' . $hash . '.cache';
+
+        return $this->cacheDir . '/' . $cacheKey;
+    }
+    
+    /**
+     * Valide que les variables ne contiennent pas d'objets dangereux
+     *
+     * @param array<string, mixed> $variables
+     * @throws VisionException Si des objets dangereux sont détectés
+     */
+    private function validateCacheVariables(array $variables): void
+    {
+        array_walk_recursive($variables, function ($value, $key) {
+            if (is_object($value)) {
+                // Autoriser seulement certaines classes safe
+                $allowedClasses = [\stdClass::class, \DateTime::class, \DateTimeImmutable::class];
+                $className = get_class($value);
+                
+                if (!in_array($className, $allowedClasses, true)) {
+                    throw new VisionException(
+                        "Object of class {$className} not allowed in cached variables. Only scalar types and safe objects are permitted."
+                    );
+                }
+            }
+        });
+    }
+}
