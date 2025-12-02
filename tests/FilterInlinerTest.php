@@ -125,7 +125,7 @@ class FilterInlinerTest extends TestCase
     public function testCompileFilterChainSingleInlineable(): void
     {
         $code = $this->inliner->compileFilterChain('$__value', ['upper'], '    ');
-        
+
         $this->assertStringContainsString('strtoupper', $code);
         $this->assertStringContainsString('// Inlined: upper', $code);
     }
@@ -133,7 +133,7 @@ class FilterInlinerTest extends TestCase
     public function testCompileFilterChainMultipleInlineable(): void
     {
         $code = $this->inliner->compileFilterChain('$__value', ['trim', 'upper'], '    ');
-        
+
         $this->assertStringContainsString('trim', $code);
         $this->assertStringContainsString('strtoupper', $code);
         $this->assertStringContainsString('// Inlined: trim', $code);
@@ -143,11 +143,11 @@ class FilterInlinerTest extends TestCase
     public function testCompileFilterChainMixed(): void
     {
         $code = $this->inliner->compileFilterChain('$__value', ['upper', 'default:Anonymous'], '    ');
-        
+
         // upper should be inlined
         $this->assertStringContainsString('strtoupper', $code);
         $this->assertStringContainsString('// Inlined: upper', $code);
-        
+
         // default should use FilterManager
         $this->assertStringContainsString('applyFilter', $code);
         $this->assertStringContainsString('default:Anonymous', $code);
@@ -162,7 +162,7 @@ class FilterInlinerTest extends TestCase
     public function testCompileFilterChainWithEmptyStrings(): void
     {
         $code = $this->inliner->compileFilterChain('$__value', ['upper', '', 'lower'], '    ');
-        
+
         // Should skip empty filter
         $this->assertStringContainsString('strtoupper', $code);
         $this->assertStringContainsString('strtolower', $code);
@@ -171,7 +171,7 @@ class FilterInlinerTest extends TestCase
     public function testCompileFilterChainIndentation(): void
     {
         $code = $this->inliner->compileFilterChain('$__value', ['upper'], '        ');
-        
+
         // Check indentation (without trimming)
         $lines = explode("\n", $code);
         $this->assertStringStartsWith('        ', $lines[0]);
@@ -182,7 +182,7 @@ class FilterInlinerTest extends TestCase
     public function testRegisterInlineFilter(): void
     {
         $this->inliner->registerInlineFilter('reverse', 'strrev(%s)');
-        
+
         $this->assertTrue($this->inliner->canInline('reverse'));
         $result = $this->inliner->inline('reverse', '$value');
         $this->assertEquals('strrev($value)', $result);
@@ -193,7 +193,7 @@ class FilterInlinerTest extends TestCase
     public function testGetInlineableFilters(): void
     {
         $filters = $this->inliner->getInlineableFilters();
-        
+
         $this->assertIsArray($filters);
         $this->assertContains('upper', $filters);
         $this->assertContains('lower', $filters);
@@ -208,9 +208,9 @@ class FilterInlinerTest extends TestCase
     public function testAnalyzeInlineablility(): void
     {
         $filters = ['upper', 'lower', 'default', 'trim', 'date'];
-        
+
         $stats = $this->inliner->analyzeInlineablility($filters);
-        
+
         $this->assertEquals(5, $stats['total']);
         $this->assertEquals(3, $stats['inlined']); // upper, lower, trim
         $this->assertEquals(60.0, $stats['percentage']);
@@ -219,7 +219,7 @@ class FilterInlinerTest extends TestCase
     public function testAnalyzeInlineablilityEmpty(): void
     {
         $stats = $this->inliner->analyzeInlineablility([]);
-        
+
         $this->assertEquals(0, $stats['total']);
         $this->assertEquals(0, $stats['inlined']);
         $this->assertEquals(0.0, $stats['percentage']);
@@ -228,9 +228,9 @@ class FilterInlinerTest extends TestCase
     public function testAnalyzeInlineablilityAllInlineable(): void
     {
         $filters = ['upper', 'lower', 'trim'];
-        
+
         $stats = $this->inliner->analyzeInlineablility($filters);
-        
+
         $this->assertEquals(3, $stats['total']);
         $this->assertEquals(3, $stats['inlined']);
         $this->assertEquals(100.0, $stats['percentage']);
@@ -239,9 +239,9 @@ class FilterInlinerTest extends TestCase
     public function testAnalyzeInlineablilityNoneInlineable(): void
     {
         $filters = ['default', 'date', 'number'];
-        
+
         $stats = $this->inliner->analyzeInlineablility($filters);
-        
+
         $this->assertEquals(3, $stats['total']);
         $this->assertEquals(0, $stats['inlined']);
         $this->assertEquals(0.0, $stats['percentage']);
@@ -253,12 +253,12 @@ class FilterInlinerTest extends TestCase
     {
         // Simulate: {{ user.name|trim|upper|escape }}
         $code = $this->inliner->compileFilterChain('$__value', ['trim', 'upper', 'escape'], '    ');
-        
+
         // All three should be inlined
         $this->assertStringContainsString('trim($__value)', $code);
         $this->assertStringContainsString('strtoupper($__value)', $code);
         $this->assertStringContainsString('htmlspecialchars', $code);
-        
+
         // Should NOT use applyFilter
         $this->assertStringNotContainsString('applyFilter', $code);
     }
@@ -267,11 +267,11 @@ class FilterInlinerTest extends TestCase
     {
         // Simulate: {{ count|number:2|upper }}
         $code = $this->inliner->compileFilterChain('$__value', ['number:2', 'upper'], '    ');
-        
+
         // number should use FilterManager
         $this->assertStringContainsString('applyFilter', $code);
         $this->assertStringContainsString('number:2', $code);
-        
+
         // upper should be inlined
         $this->assertStringContainsString('strtoupper', $code);
         $this->assertStringContainsString('// Inlined: upper', $code);

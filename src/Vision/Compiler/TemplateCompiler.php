@@ -17,11 +17,13 @@ class TemplateCompiler
 {
     private ConstantFolder $constantFolder;
     private FilterInliner $filterInliner;
+    private DeadBranchEliminator $branchEliminator;
 
     public function __construct()
     {
         $this->constantFolder = new ConstantFolder();
         $this->filterInliner = new FilterInliner();
+        $this->branchEliminator = new DeadBranchEliminator();
     }
     /**
      * Compile un template parsé en code PHP
@@ -32,7 +34,10 @@ class TemplateCompiler
      */
     public function compile(ParsedTemplate $parsed): CompiledTemplate
     {
-        $phpCode = $this->compileAST($parsed->ast);
+        // Optimiser l'AST en éliminant les branches mortes
+        $optimizedAST = $this->branchEliminator->optimize($parsed->ast);
+        
+        $phpCode = $this->compileAST($optimizedAST);
 
         return new CompiledTemplate(
             $phpCode,
@@ -125,7 +130,7 @@ class TemplateCompiler
                 $filters = explode('|', $filterChain);
                 $filters = array_map('trim', $filters);
                 $filters = array_filter($filters); // Remove empty
-                
+
                 // Utiliser FilterInliner pour optimiser les filtres
                 $code .= $this->filterInliner->compileFilterChain('$__value', $filters, $indent);
             }
