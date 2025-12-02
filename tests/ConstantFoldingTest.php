@@ -243,7 +243,7 @@ class ConstantFoldingTest extends TestCase
     {
         $result = $this->folder->fold('true');
         $this->assertEquals('true', $result);
-        
+
         $result = $this->folder->fold('false');
         $this->assertEquals('false', $result);
     }

@@ -16,10 +16,12 @@ use JulienLinard\Vision\Exception\VisionException;
 class TemplateCompiler
 {
     private ConstantFolder $constantFolder;
+    private FilterInliner $filterInliner;
 
     public function __construct()
     {
         $this->constantFolder = new ConstantFolder();
+        $this->filterInliner = new FilterInliner();
     }
     /**
      * Compile un template parsé en code PHP
@@ -31,7 +33,7 @@ class TemplateCompiler
     public function compile(ParsedTemplate $parsed): CompiledTemplate
     {
         $phpCode = $this->compileAST($parsed->ast);
-        
+
         return new CompiledTemplate(
             $phpCode,
             $parsed
@@ -52,13 +54,13 @@ class TemplateCompiler
         $code .= "\$__output = [];\n";
         $code .= "// Helpers attendus: resolveVariable, applyFilter, evaluateCondition\n";
         $code .= "if (!isset(\$__helpers) || !is_array(\$__helpers)) { throw new \\RuntimeException('Helpers manquants'); }\n\n";
-        
+
         foreach ($node->children as $child) {
             $code .= $this->compileNode($child, 0);
         }
-        
+
         $code .= "\nreturn implode('', \$__output);\n";
-        
+
         return $code;
     }
 
@@ -72,7 +74,7 @@ class TemplateCompiler
     private function compileNode(ASTNode $node, int $indent): string
     {
         $indentStr = str_repeat('    ', $indent);
-        
+
         return match ($node->type) {
             NodeType::TEXT => $this->compileText($node, $indentStr),
             NodeType::VARIABLE => $this->compileVariable($node, $indentStr),
@@ -100,15 +102,15 @@ class TemplateCompiler
     private function compileVariable(ASTNode $node, string $indent): string
     {
         $code = '';
-        
+
         // Extraire le nom de variable et les filtres depuis metadata
         if (isset($node->metadata[1])) {
             $varName = $node->metadata[1][0];
             $filterChain = isset($node->metadata[2]) ? $node->metadata[2][0] : null;
-            
+
             // Optimisation: vérifier si c'est une expression constante
             $optimized = $this->constantFolder->fold($varName);
-            
+
             if ($optimized !== $varName && $this->constantFolder->isOptimizable($varName)) {
                 // Expression constante optimisée: insérer directement
                 $code .= "{$indent}// Constant folded: {$varName} -> {$optimized}\n";
@@ -117,22 +119,21 @@ class TemplateCompiler
                 // Variable dynamique: résolution normale
                 $code .= "{$indent}\$__value = \$__helpers['resolveVariable']('{$varName}', \$__variables);\n";
             }
-            
+
             // Appliquer les filtres si présents
             if ($filterChain !== null && $filterChain !== '') {
                 $filters = explode('|', $filterChain);
-                foreach ($filters as $filter) {
-                    $filter = trim($filter);
-                    if ($filter !== '') {
-                        $code .= "{$indent}\$__value = \$__helpers['applyFilter']('{$filter}', \$__value);\n";
-                    }
-                }
+                $filters = array_map('trim', $filters);
+                $filters = array_filter($filters); // Remove empty
+                
+                // Utiliser FilterInliner pour optimiser les filtres
+                $code .= $this->filterInliner->compileFilterChain('$__value', $filters, $indent);
             }
-            
+
             // Ajouter à l'output
             $code .= "{$indent}\$__output[] = \$__value;\n";
         }
-        
+
         return $code;
     }
 
@@ -143,16 +144,16 @@ class TemplateCompiler
     {
         $indentStr = str_repeat('    ', $indent);
         $code = '';
-        
+
         // Extraire les informations de la boucle
         if (isset($node->metadata[1]) && isset($node->metadata[2])) {
             $itemVar = $node->metadata[1][0];
             $arrayVar = $node->metadata[2][0];
             $condition = isset($node->metadata[3]) ? trim($node->metadata[3][0]) : null;
-            
+
             $code .= "{$indentStr}\$__array = \$__helpers['resolveVariable']('{$arrayVar}', \$__variables);\n";
             $code .= "{$indentStr}if (is_array(\$__array) || \$__array instanceof \\Traversable) {\n";
-            
+
             if ($condition !== null) {
                 $code .= "{$indentStr}    \$__filtered = [];\n";
                 $code .= "{$indentStr}    foreach (\$__array as \$__item) {\n";
@@ -163,19 +164,19 @@ class TemplateCompiler
                 $code .= "{$indentStr}    }\n";
                 $code .= "{$indentStr}    \$__array = \$__filtered;\n";
             }
-            
+
             $code .= "{$indentStr}    foreach (\$__array as \$__item) {\n";
             $code .= "{$indentStr}        \$__variables['{$itemVar}'] = \$__item;\n";
-            
+
             // Compiler les enfants
             foreach ($node->children as $child) {
                 $code .= $this->compileNode($child, $indent + 2);
             }
-            
+
             $code .= "{$indentStr}    }\n";
             $code .= "{$indentStr}}\n";
         }
-        
+
         return $code;
     }
 
@@ -186,13 +187,13 @@ class TemplateCompiler
     {
         $indentStr = str_repeat('    ', $indent);
         $code = '';
-        
+
         if (isset($node->metadata[1])) {
             $condition = trim($node->metadata[1][0]);
             $escapedCondition = addcslashes($condition, "'\\");
-            
+
             $code .= "{$indentStr}if (\$__helpers['evaluateCondition']('{$escapedCondition}', \$__variables)) {\n";
-            
+
             // Compiler les enfants (corps du if)
             foreach ($node->children as $child) {
                 // Skip elseif et else, ils sont gérés séparément
@@ -201,9 +202,9 @@ class TemplateCompiler
                 }
                 $code .= $this->compileNode($child, $indent + 1);
             }
-            
+
             $code .= "{$indentStr}}";
-            
+
             // Gérer les elseif et else
             $foundElse = false;
             foreach ($node->children as $child) {
@@ -215,10 +216,10 @@ class TemplateCompiler
                     break;
                 }
             }
-            
+
             $code .= "\n";
         }
-        
+
         return $code;
     }
 
@@ -229,20 +230,20 @@ class TemplateCompiler
     {
         $indentStr = str_repeat('    ', $indent);
         $code = '';
-        
+
         if (isset($node->metadata[1])) {
             $condition = trim($node->metadata[1][0]);
             $escapedCondition = addcslashes($condition, "'\\");
-            
+
             $code .= " elseif (\$__helpers['evaluateCondition']('{$escapedCondition}', \$__variables)) {\n";
-            
+
             foreach ($node->children as $child) {
                 $code .= $this->compileNode($child, $indent + 1);
             }
-            
+
             $code .= "{$indentStr}}";
         }
-        
+
         return $code;
     }
 
@@ -253,13 +254,13 @@ class TemplateCompiler
     {
         $indentStr = str_repeat('    ', $indent);
         $code = " else {\n";
-        
+
         foreach ($node->children as $child) {
             $code .= $this->compileNode($child, $indent + 1);
         }
-        
+
         $code .= "{$indentStr}}";
-        
+
         return $code;
     }
 
