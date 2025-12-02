@@ -1,0 +1,53 @@
+{
+    "name": "julienlinard/php-vision",
+    "description": "Moteur de template PHP moderne pour remplacer Twig, avec support des variables {{ variable }}, filtres avec pipe |, et structures de contrôle",
+    "type": "library",
+    "keywords": [
+        "template",
+        "templating",
+        "engine",
+        "php",
+        "php8",
+        "twig",
+        "view",
+        "renderer",
+        "filters",
+        "variables"
+    ],
+    "homepage": "https://github.com/julien-lin/php-vision",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Julien Linard",
+            "email": "julien.linard.dev@gmail.com",
+            "homepage": "https://github.com/julien-lin"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/julien-lin/php-vision/issues",
+        "source": "https://github.com/julien-lin/php-vision"
+    },
+    "require": {
+        "php": ">=8.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "JulienLinard\\Vision\\": "src/Vision/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "JulienLinard\\Vision\\Tests\\": "tests/"
+        }
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^12.0"
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-text"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "version": "1.0.0"
+}
