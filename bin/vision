@@ -1,0 +1,228 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Vision CLI - Commandes utiles pour gérer le moteur de templates
+ */
+
+if (PHP_SAPI !== 'cli') {
+    echo "Ce script doit être exécuté en ligne de commande.\n";
+    exit(1);
+}
+
+// Autoloader
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+
+foreach ($autoloadPaths as $path) {
+    if (file_exists($path)) {
+        require_once $path;
+        break;
+    }
+}
+
+use JulienLinard\Vision\Vision;
+use JulienLinard\Vision\Parser\TemplateParser;
+use JulienLinard\Vision\Compiler\TemplateCompiler;
+use JulienLinard\Vision\Cache\CacheManager;
+
+$command = $argv[1] ?? 'help';
+
+match ($command) {
+    'help', '-h', '--help' => showHelp(),
+    'cache:clear' => cacheClear($argv),
+    'cache:stats' => cacheStats($argv),
+    'compile' => compileTemplates($argv),
+    'version' => showVersion(),
+    default => unknownCommand($command),
+};
+
+function showHelp(): void
+{
+    echo <<<'HELP'
+Vision CLI - Moteur de templates PHP moderne
+
+Usage:
+  vision <commande> [options]
+
+Commandes disponibles:
+  help              Afficher cette aide
+  version           Afficher la version de Vision
+  cache:clear       Nettoyer le cache des templates
+  cache:stats       Afficher les statistiques du cache
+  compile           Précompiler les templates (nécessite --templates et --cache)
+
+Exemples:
+  vision cache:clear --cache=/path/to/cache
+  vision cache:stats --cache=/path/to/compiled
+  vision compile --templates=/path/to/templates --cache=/path/to/compiled
+
+HELP;
+}
+
+function showVersion(): void
+{
+    echo "Vision Template Engine v2.0.0\n";
+    echo "PHP " . PHP_VERSION . "\n";
+}
+
+function cacheClear(array $argv): void
+{
+    $cacheDir = getOption($argv, '--cache');
+
+    if (!$cacheDir) {
+        echo "Erreur: --cache requis\n";
+        echo "Usage: vision cache:clear --cache=/path/to/cache\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        echo "Erreur: Le répertoire $cacheDir n'existe pas\n";
+        exit(1);
+    }
+
+    $files = glob($cacheDir . '/*.cache');
+    $phpFiles = glob($cacheDir . '/*.php');
+    $allFiles = array_merge($files ?: [], $phpFiles ?: []);
+
+    $deleted = 0;
+    foreach ($allFiles as $file) {
+        if (is_file($file)) {
+            unlink($file);
+            $deleted++;
+        }
+    }
+
+    echo "✓ Cache nettoyé: $deleted fichier(s) supprimé(s)\n";
+}
+
+function cacheStats(array $argv): void
+{
+    $cacheDir = getOption($argv, '--cache');
+
+    if (!$cacheDir) {
+        echo "Erreur: --cache requis\n";
+        echo "Usage: vision cache:stats --cache=/path/to/cache\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        echo "Erreur: Le répertoire $cacheDir n'existe pas\n";
+        exit(1);
+    }
+
+    $cacheManager = new CacheManager($cacheDir, 3600);
+    $stats = $cacheManager->getStats();
+
+    echo "Statistiques du cache:\n";
+    echo "  Répertoire: $cacheDir\n";
+    echo "  Nombre de fichiers: {$stats['total']}\n";
+    echo "  Taille totale: " . formatBytes($stats['size']) . "\n";
+
+    if ($stats['oldest'] > 0) {
+        $oldestDate = date('Y-m-d H:i:s', $stats['oldest']);
+        echo "  Plus ancien: $oldestDate\n";
+    }
+}
+
+function compileTemplates(array $argv): void
+{
+    $templatesDir = getOption($argv, '--templates');
+    $cacheDir = getOption($argv, '--cache');
+
+    if (!$templatesDir || !$cacheDir) {
+        echo "Erreur: --templates et --cache requis\n";
+        echo "Usage: vision compile --templates=/path/to/templates --cache=/path/to/compiled\n";
+        exit(1);
+    }
+
+    if (!is_dir($templatesDir)) {
+        echo "Erreur: Le répertoire templates $templatesDir n'existe pas\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0755, true);
+    }
+
+    $parser = new TemplateParser();
+    $compiler = new TemplateCompiler();
+    $cacheManager = new CacheManager($cacheDir, 86400);
+
+    // Trouver tous les templates .html.vis, .vis
+    $templates = [];
+    $patterns = ['*.html.vis', '*.vis', '*.php', '*.html'];
+
+    foreach ($patterns as $pattern) {
+        $found = glob($templatesDir . '/' . $pattern);
+        if ($found) {
+            $templates = array_merge($templates, $found);
+        }
+
+        // Récursif
+        $foundRecursive = glob($templatesDir . '/**/' . $pattern);
+        if ($foundRecursive) {
+            $templates = array_merge($templates, $foundRecursive);
+        }
+    }
+
+    $templates = array_unique($templates);
+    $compiled = 0;
+
+    echo "Compilation des templates...\n";
+    foreach ($templates as $templatePath) {
+        $content = file_get_contents($templatePath);
+        if ($content === false) {
+            continue;
+        }
+
+        try {
+            $parsed = $parser->parse($content);
+            $compiledObj = $compiler->compile($parsed);
+            $cacheManager->saveCompiled($templatePath, $compiledObj);
+            $compiled++;
+            $relativePath = str_replace($templatesDir . '/', '', $templatePath);
+            echo "  ✓ $relativePath\n";
+        } catch (Exception $e) {
+            $relativePath = str_replace($templatesDir . '/', '', $templatePath);
+            echo "  ✗ $relativePath: {$e->getMessage()}\n";
+        }
+    }
+
+    echo "\n✓ Compilation terminée: $compiled template(s) compilé(s)\n";
+}
+
+function unknownCommand(string $command): void
+{
+    echo "Commande inconnue: $command\n";
+    echo "Utilisez 'vision help' pour voir les commandes disponibles.\n";
+    exit(1);
+}
+
+function getOption(array $argv, string $option): ?string
+{
+    foreach ($argv as $arg) {
+        if (str_starts_with($arg, $option . '=')) {
+            return substr($arg, strlen($option) + 1);
+        }
+    }
+    return null;
+}
+
+function formatBytes(int $bytes): string
+{
+    $units = ['B', 'KB', 'MB', 'GB'];
+    $unitIndex = 0;
+    $value = $bytes;
+
+    while ($value >= 1024 && $unitIndex < count($units) - 1) {
+        $value /= 1024;
+        $unitIndex++;
+    }
+
+    return round($value, 2) . ' ' . $units[$unitIndex];
+}

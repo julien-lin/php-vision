@@ -23,6 +23,7 @@ use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Cache\CacheManager;
 use JulienLinard\Vision\Runtime\VariableResolver;
 use JulienLinard\Vision\Runtime\ControlStructureProcessor;
+use JulienLinard\Vision\Runtime\SafeString;
 
 /**
  * Moteur de template Vision
@@ -44,7 +45,7 @@ class Vision
      */
     private const MAX_RECURSION_DEPTH = 50;
     private const MAX_TEMPLATE_SIZE = 10485760; // 10MB
-    
+
 
     /**
      * @var string Chemin vers le répertoire des templates
@@ -103,6 +104,7 @@ class Vision
         $this->filterManager = new FilterManager();
         $this->resolver = new VariableResolver();
         $this->registerDefaultFilters();
+        $this->registerDefaultFunctions();
     }
 
     /**
@@ -119,6 +121,43 @@ class Vision
         $this->registerFilter(new NumberFormatFilter());
         $this->registerFilter(new LengthFilter());
         $this->registerFilter(new JsonFilter());
+    }
+
+    /**
+     * Enregistre les fonctions par défaut (template/include/component)
+     */
+    private function registerDefaultFunctions(): void
+    {
+        // Rendre un sous-template avec des variables explicites
+        // Usage: {{ template("partials/header", vars) }}
+        $this->registerFunction('template', function (string $name, array $vars = []) {
+            return new SafeString($this->render($name, $vars));
+        });
+
+        // Alias pratique: include(name, vars)
+        $this->registerFunction('include', function (string $name, array $vars = []) {
+            return new SafeString($this->render($name, $vars));
+        });
+
+        // Composants réutilisables (convention: templates/components/)
+        // Usage: {{ component("Button", { label: "Save", variant: "primary" }) }}
+        $this->registerFunction('component', function (string $name, array $props = []) {
+            // Convention: chercher dans components/ si pas de chemin explicite
+            if (!str_contains($name, '/')) {
+                $name = 'components/' . $name;
+            }
+            return new SafeString($this->render($name, $props));
+        });
+
+        // Slots: passer des contenus nommés (remplace extends/blocks)
+        // Usage: {{ slot("header", headerContent) }}
+        // Note: le contenu doit être pré-rendu (via template/component)
+        // Le slot retourne le contenu tel quel, sans échappement (déjà rendu)
+        $this->registerFunction('slot', function (string $name, string $content = '') {
+            // Slots sont gérés via variables explicites, pas de capture magique
+            // On retourne le contenu brut car il a déjà été rendu/échappé
+            return new SafeString($content);
+        });
     }
 
     /**
@@ -197,7 +236,7 @@ class Vision
     {
         $this->cacheEnabled = $enabled;
         $this->cacheTTL = $ttl;
-        
+
         if ($cacheDir !== null) {
             $this->cacheDir = rtrim($cacheDir, '/\\');
             // Créer le répertoire de cache s'il n'existe pas
@@ -207,7 +246,7 @@ class Vision
                 }
             }
         }
-        
+
         return $this;
     }
 
@@ -334,7 +373,7 @@ class Vision
         if ($depth > self::MAX_RECURSION_DEPTH) {
             throw new VisionException(
                 "Profondeur de récursion maximale atteinte (" . self::MAX_RECURSION_DEPTH . "). " .
-                "Vérifiez vos templates pour des boucles ou conditions imbriquées trop profondes."
+                    "Vérifiez vos templates pour des boucles ou conditions imbriquées trop profondes."
             );
         }
 
@@ -468,20 +507,24 @@ class Vision
         // Détecter si c'est une fonction (pattern plus permissif pour capturer tous les cas)
         if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*|.+?)\((.*?)\)$/', $expression, $funcMatches)) {
             $funcName = $funcMatches[1];
-            
+
             // Valider le nom de fonction pour la sécurité (seulement lettres, chiffres et underscore)
             if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $funcName)) {
                 // Message générique en production
                 throw new VisionException("Invalid function call in template");
             }
-            
+
             $params = $this->parseFunctionParams($funcMatches[2], $variables);
 
             if (isset($this->functions[$funcName])) {
                 $result = call_user_func_array($this->functions[$funcName], $params);
+                // Si SafeString, retourner le contenu brut (déjà rendu/échappé)
+                if ($result instanceof SafeString) {
+                    return $result->getValue();
+                }
                 return $this->formatValue($result);
             }
-            
+
             // Si la fonction n'existe pas, retourner une chaîne vide plutôt que l'expression
             return '';
         }
@@ -601,42 +644,57 @@ class Vision
     private function getTemplatePath(string $template): string
     {
         // Validation stricte: interdire tout caractère de traversée
-        if (preg_match('#\.\.|[\\/]{2,}|[\x00-\x1f]#', $template)) {
-            throw new TemplateNotFoundException($template);
+        if (preg_match('#\..|[\\/]{2,}|[\x00-\x1f]#', $template)) {
+            // Autoriser un seul point pour l'extension, interdire '..' et caractères de contrôle
+            if (str_contains($template, '..')) {
+                throw new TemplateNotFoundException($template);
+            }
         }
-        
-        // Ajouter extension si absente
-        if (!str_contains($template, '.php') && !str_contains($template, '.html')) {
-            $template .= '.php';
+
+        // Déterminer les candidats d'extension si aucune extension explicite n'est fournie
+        $hasExtension = str_contains($template, '.');
+        $candidates = [];
+        if ($hasExtension) {
+            $candidates[] = $template;
+        } else {
+            // Priorité: .html.vis (nouvelle extension), .vis, .php, .html
+            $candidates[] = $template . '.html.vis';
+            $candidates[] = $template . '.vis';
+            $candidates[] = $template . '.php';
+            $candidates[] = $template . '.html';
         }
 
         if ($this->templateDir) {
-            // Résoudre le chemin de base AVANT
             $realBasePath = realpath($this->templateDir);
             if ($realBasePath === false || !is_dir($realBasePath)) {
                 throw new VisionException("Template directory invalid: {$this->templateDir}");
             }
-            
-            // Construire le chemin sans permettre de sortir
-            $fullPath = $realBasePath . DIRECTORY_SEPARATOR . ltrim($template, '\\/');
-            
-            // Résoudre le chemin final
-            $realFullPath = realpath($fullPath);
-            
-            // Vérifier que le fichier existe ET est dans le répertoire autorisé
-            if ($realFullPath === false || !is_file($realFullPath)) {
-                throw new TemplateNotFoundException($template);
+
+            foreach ($candidates as $candidate) {
+                $fullPath = $realBasePath . DIRECTORY_SEPARATOR . ltrim($candidate, '\\/');
+                $realFullPath = realpath($fullPath);
+
+                if ($realFullPath !== false && is_file($realFullPath)) {
+                    // Protection stricte: le chemin doit commencer par le base path
+                    if (strpos($realFullPath, $realBasePath . DIRECTORY_SEPARATOR) === 0) {
+                        return $realFullPath;
+                    }
+                }
             }
-            
-            // Protection stricte: le chemin doit commencer par le base path
-            if (strpos($realFullPath, $realBasePath . DIRECTORY_SEPARATOR) !== 0) {
-                throw new TemplateNotFoundException($template);
-            }
-            
-            return $realFullPath;
+
+            // Aucun candidat trouvé
+            throw new TemplateNotFoundException($template);
         }
 
-        return $template;
+        // Pas de templateDir: essayer les candidats dans le cwd
+        foreach ($candidates as $candidate) {
+            $realFullPath = realpath($candidate);
+            if ($realFullPath !== false && is_file($realFullPath)) {
+                return $realFullPath;
+            }
+        }
+
+        throw new TemplateNotFoundException($template);
     }
 
     /**
@@ -679,7 +737,7 @@ class Vision
         // FIX: Verrouillage BLOQUANT avec timeout pour éviter race conditions
         $startTime = time();
         $timeout = 5; // 5 secondes max
-        
+
         while (!flock($fp, LOCK_SH)) {
             if (time() - $startTime > $timeout) {
                 fclose($fp);
@@ -730,7 +788,7 @@ class Vision
         // FIX: Verrouillage BLOQUANT avec timeout
         $startTime = time();
         $timeout = 5;
-        
+
         while (!flock($fp, LOCK_EX)) {
             if (time() - $startTime > $timeout) {
                 fclose($fp);
@@ -738,7 +796,7 @@ class Vision
             }
             usleep(50000); // Attendre 50ms
         }
-        
+
         ftruncate($fp, 0);
         fwrite($fp, $content);
         fflush($fp);
@@ -757,7 +815,7 @@ class Vision
     {
         // SÉCURITÉ: Valider les types des variables pour éviter object injection
         $this->validateCacheVariables($variables);
-        
+
         // Inclure le timestamp du template dans le hash pour invalidation automatique
         $templateMTime = file_exists($templatePath) ? filemtime($templatePath) : 0;
 
@@ -777,14 +835,15 @@ class Vision
         $hash = substr($hash, 0, 32);
 
         // Nettoyer le nom du template pour le nom de fichier
-        $templateName = basename($templatePath, '.php');
+        // Extraire le nom du template sans extension (supporte .html.vis, .vis, .php, .html)
+        $templateName = pathinfo($templatePath, PATHINFO_FILENAME);
         $templateName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $templateName);
 
         $cacheKey = $templateName . '_' . $hash . '.cache';
 
         return $this->cacheDir . '/' . $cacheKey;
     }
-    
+
     /**
      * Valide que les variables ne contiennent pas d'objets dangereux
      *
@@ -798,7 +857,7 @@ class Vision
                 // Autoriser seulement certaines classes safe
                 $allowedClasses = [\stdClass::class, \DateTime::class, \DateTimeImmutable::class];
                 $className = get_class($value);
-                
+
                 if (!in_array($className, $allowedClasses, true)) {
                     throw new VisionException(
                         "Object of class {$className} not allowed in cached variables. Only scalar types and safe objects are permitted."
