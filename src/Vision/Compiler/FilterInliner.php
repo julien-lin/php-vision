@@ -51,7 +51,7 @@ class FilterInliner
     {
         // Parse filter name (may include parameters like "default:value")
         $baseName = explode(':', $filterName)[0];
-        
+
         return isset($this->inlineMap[$baseName]) && !in_array($baseName, $this->nonInlineable, true);
     }
 
@@ -65,20 +65,20 @@ class FilterInliner
     public function inline(string $filterName, string $valueExpr): string
     {
         $baseName = explode(':', $filterName)[0];
-        
+
         if (!$this->canInline($baseName)) {
             throw new \InvalidArgumentException("Filter '$filterName' cannot be inlined");
         }
 
         $pattern = $this->inlineMap[$baseName];
-        
+
         // Handle filters that need the value multiple times (like length)
         $occurrences = substr_count($pattern, '%s');
         if ($occurrences > 1) {
             // Use array_fill to repeat the value expression
             return sprintf($pattern, ...array_fill(0, $occurrences, $valueExpr));
         }
-        
+
         return sprintf($pattern, $valueExpr);
     }
 
@@ -95,13 +95,13 @@ class FilterInliner
     {
         $code = '';
         $currentExpr = $valueVar;
-        
+
         foreach ($filters as $filter) {
             $filter = trim($filter);
             if ($filter === '') {
                 continue;
             }
-            
+
             if ($this->canInline($filter)) {
                 // Inline: generate direct PHP code
                 $inlined = $this->inline($filter, $currentExpr);
@@ -113,7 +113,7 @@ class FilterInliner
                 $currentExpr = $valueVar;
             }
         }
-        
+
         return $code;
     }
 
@@ -149,15 +149,15 @@ class FilterInliner
     {
         $total = count($filters);
         $inlined = 0;
-        
+
         foreach ($filters as $filter) {
             if ($this->canInline($filter)) {
                 $inlined++;
             }
         }
-        
+
         $percentage = $total > 0 ? ($inlined / $total) * 100 : 0;
-        
+
         return [
             'inlined' => $inlined,
             'total' => $total,

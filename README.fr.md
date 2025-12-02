@@ -2,7 +2,7 @@
 
 [![Version PHP](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![Licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-204%20r%C3%A9ussis-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-230%20r%C3%A9ussis-success.svg)](tests/)
 
 [🇫🇷 Lire en français](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -19,7 +19,7 @@ Vision allie simplicité et performance de niveau entreprise grâce à son **pip
 - 🔒 **Sécurisé par Défaut** - Échappement automatique, protection path traversal, prévention XSS
 - 🎯 **Syntaxe Simple** - Variables `{{ var }}`, filtres `|upper`, structures `{% if %}`
 - 🏗️ **Architecture Modulaire** - 7 modules indépendants (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Entièrement Testé** - 204 tests, 419 assertions, couverture fonctionnelle 100%
+- 🧪 **Entièrement Testé** - 230 tests, 486 assertions, couverture fonctionnelle 100%
 - 🎨 **Extensible** - Filtres, fonctions et processeurs personnalisés
 - 📦 **Zéro Dépendance** - Autonome, aucun package externe requis
 - 💪 **PHP 8.0+** - PHP moderne avec typage strict
@@ -154,6 +154,66 @@ Vision compile automatiquement les filtres courants en fonctions PHP natives au 
 
 **Optimisation automatique** - Aucune configuration nécessaire ! Le compilateur détecte et inline automatiquement les filtres supportés lors de la compilation du template.
 
+### Dead Branch Elimination (5-10% Plus Rapide) ⚡
+
+Vision supprime automatiquement le code inaccessible lors de la compilation, offrant une **amélioration de 5-10%** en éliminant les branches mortes des templates compilés.
+
+**Comment ça fonctionne :**
+
+```php
+// Template avec conditions statiques
+{% if true %}
+    Ceci est toujours affiché
+{% endif %}
+
+{% if false %}
+    Ceci n'est jamais affiché
+{% endif %}
+
+// Sortie compilée (optimisée)
+Ceci est toujours affiché
+
+// Le bloc {% if false %} est complètement supprimé !
+```
+
+**Optimisations :**
+
+```php
+// 1. Élimination {% if true %} → Garde uniquement le contenu
+{% if true %}Contenu{% endif %}
+// Compilé : Contenu
+
+// 2. Élimination {% if false %} → Supprime le bloc entier
+{% if false %}Code mort{% endif %}
+// Compilé : (rien)
+
+// 3. Élimination de la branche else quand if est true
+{% if true %}Actif{% else %}Mort{% endif %}
+// Compilé : Actif
+
+// 4. Garde la branche else quand if est false
+{% if false %}Mort{% else %}Actif{% endif %}
+// Compilé : Actif
+
+// 5. Gestion des chaînes elseif
+{% if false %}A{% elseif true %}B{% else %}C{% endif %}
+// Compilé : B
+
+// 6. Préservation des conditions variables (pas d'optimisation)
+{% if user.isAdmin %}Panneau admin{% endif %}
+// Compilé : (inchangé - évaluation runtime)
+```
+
+**Expressions booléennes supportées :**
+
+```php
+{% if 1 + 1 == 2 %}Toujours vrai{% endif %}      // Constant folding + élimination
+{% if 5 > 3 && 2 < 4 %}Toujours vrai{% endif %}  // Opérateurs booléens
+{% if !false %}Toujours vrai{% endif %}           // Négation
+```
+
+**Optimisation automatique** - Fonctionne parfaitement avec Constant Folding. Aucune configuration nécessaire !
+
 ### Rendu Direct d'une Chaîne
 
 ```php
@@ -198,6 +258,7 @@ Vision (Orchestrateur)
 - ✅ **Cache Intelligent** - Multi-niveaux avec TTL et invalidation automatique
 - ✅ **Cache de Fragments** - Cache les composants par props pour gains massifs
 - ✅ **Constant Folding** - Pré-calcule les expressions constantes à la compilation (10-20% plus rapide)
+- ✅ **Dead Branch Elimination** - Supprime le code inaccessible ({% if false %}) à la compilation (5-10% plus rapide)
 - ✅ **Inline Filters** - Compile les filtres communs en PHP natif (15-30% plus rapide)
 - ✅ **Compilation** - Compilation PHP optionnelle pour performances extrêmes
 - ✅ **Outils CLI** - Gestion du cache, compilation et commandes statistiques
