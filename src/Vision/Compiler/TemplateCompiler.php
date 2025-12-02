@@ -15,6 +15,12 @@ use JulienLinard\Vision\Exception\VisionException;
  */
 class TemplateCompiler
 {
+    private ConstantFolder $constantFolder;
+
+    public function __construct()
+    {
+        $this->constantFolder = new ConstantFolder();
+    }
     /**
      * Compile un template parsé en code PHP
      * 
@@ -100,8 +106,17 @@ class TemplateCompiler
             $varName = $node->metadata[1][0];
             $filterChain = isset($node->metadata[2]) ? $node->metadata[2][0] : null;
             
-            // Générer le code d'accès à la variable
-            $code .= "{$indent}\$__value = \$__helpers['resolveVariable']('{$varName}', \$__variables);\n";
+            // Optimisation: vérifier si c'est une expression constante
+            $optimized = $this->constantFolder->fold($varName);
+            
+            if ($optimized !== $varName && $this->constantFolder->isOptimizable($varName)) {
+                // Expression constante optimisée: insérer directement
+                $code .= "{$indent}// Constant folded: {$varName} -> {$optimized}\n";
+                $code .= "{$indent}\$__value = {$optimized};\n";
+            } else {
+                // Variable dynamique: résolution normale
+                $code .= "{$indent}\$__value = \$__helpers['resolveVariable']('{$varName}', \$__variables);\n";
+            }
             
             // Appliquer les filtres si présents
             if ($filterChain !== null && $filterChain !== '') {

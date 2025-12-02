@@ -19,7 +19,7 @@ Vision allie simplicité et performance de niveau entreprise grâce à son **pip
 - 🔒 **Sécurisé par Défaut** - Échappement automatique, protection path traversal, prévention XSS
 - 🎯 **Syntaxe Simple** - Variables `{{ var }}`, filtres `|upper`, structures `{% if %}`
 - 🏗️ **Architecture Modulaire** - 7 modules indépendants (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Entièrement Testé** - 137 tests, 316 assertions, couverture fonctionnelle 100%
+- 🧪 **Entièrement Testé** - 172 tests, 356 assertions, couverture fonctionnelle 100%
 - 🎨 **Extensible** - Filtres, fonctions et processeurs personnalisés
 - 📦 **Zéro Dépendance** - Autonome, aucun package externe requis
 - 💪 **PHP 8.0+** - PHP moderne avec typage strict
@@ -166,6 +166,7 @@ Vision (Orchestrateur)
 - ✅ **Protection XSS** - Échappement automatique activé par défaut
 - ✅ **Cache Intelligent** - Multi-niveaux avec TTL et invalidation automatique
 - ✅ **Cache de Fragments** - Cache les composants par props pour gains massifs
+- ✅ **Constant Folding** - Pré-calcule les expressions constantes à la compilation (10-20% plus rapide)
 - ✅ **Compilation** - Compilation PHP optionnelle pour performances extrêmes
 - ✅ **Outils CLI** - Gestion du cache, compilation et commandes statistiques
 
