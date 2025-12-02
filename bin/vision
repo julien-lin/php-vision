@@ -29,6 +29,7 @@ use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Cache\CacheManager;
+use JulienLinard\Vision\Cache\FragmentCache;
 
 $command = $argv[1] ?? 'help';
 
@@ -36,6 +37,8 @@ match ($command) {
     'help', '-h', '--help' => showHelp(),
     'cache:clear' => cacheClear($argv),
     'cache:stats' => cacheStats($argv),
+    'fragment:clear' => fragmentClear($argv),
+    'fragment:stats' => fragmentStats($argv),
     'compile' => compileTemplates($argv),
     'version' => showVersion(),
     default => unknownCommand($command),
@@ -54,11 +57,15 @@ Commandes disponibles:
   version           Afficher la version de Vision
   cache:clear       Nettoyer le cache des templates
   cache:stats       Afficher les statistiques du cache
+  fragment:clear    Nettoyer le cache des fragments (composants)
+  fragment:stats    Afficher les statistiques du cache des fragments
   compile           Précompiler les templates (nécessite --templates et --cache)
 
 Exemples:
   vision cache:clear --cache=/path/to/cache
   vision cache:stats --cache=/path/to/compiled
+  vision fragment:clear --cache=/path/to/fragments
+  vision fragment:stats --cache=/path/to/fragments
   vision compile --templates=/path/to/templates --cache=/path/to/compiled
 
 HELP;
@@ -194,6 +201,56 @@ function compileTemplates(array $argv): void
     }
 
     echo "\n✓ Compilation terminée: $compiled template(s) compilé(s)\n";
+}
+
+function fragmentClear(array $argv): void
+{
+    $cacheDir = getOption($argv, '--cache');
+
+    if (!$cacheDir) {
+        echo "Erreur: --cache requis\n";
+        echo "Usage: vision fragment:clear --cache=/path/to/fragments\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        echo "Erreur: Le répertoire $cacheDir n'existe pas\n";
+        exit(1);
+    }
+
+    $fragmentCache = new FragmentCache($cacheDir, 3600, true);
+    $deleted = $fragmentCache->clearAll();
+
+    echo "✓ Cache des fragments nettoyé: $deleted fragment(s) supprimé(s)\n";
+}
+
+function fragmentStats(array $argv): void
+{
+    $cacheDir = getOption($argv, '--cache');
+
+    if (!$cacheDir) {
+        echo "Erreur: --cache requis\n";
+        echo "Usage: vision fragment:stats --cache=/path/to/fragments\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        echo "Erreur: Le répertoire $cacheDir n'existe pas\n";
+        exit(1);
+    }
+
+    $fragmentCache = new FragmentCache($cacheDir, 3600, true);
+    $stats = $fragmentCache->getStats();
+
+    echo "Statistiques du cache des fragments:\n";
+    echo "  Répertoire: $cacheDir\n";
+    echo "  Nombre de fragments: {$stats['total']}\n";
+    echo "  Taille totale: " . formatBytes($stats['size']) . "\n";
+
+    if ($stats['oldest'] > 0) {
+        $oldestDate = date('Y-m-d H:i:s', $stats['oldest']);
+        echo "  Plus ancien: $oldestDate\n";
+    }
 }
 
 function unknownCommand(string $command): void
