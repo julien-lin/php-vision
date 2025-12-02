@@ -143,6 +143,48 @@ $html = $vision->renderString($template, ['name' => 'Julien']);
 // Result: "Hello Julien !"
 ```
 
+### Supported File Extensions
+
+When calling `render('template')` without an extension, Vision will try the following in order:
+
+1. `.html.vis` (recommended for Vision templates)
+2. `.vis`
+3. `.php`
+4. `.html`
+
+### Simple Includes (Partials)
+
+Vision provides built-in functions to include other templates:
+
+```php
+// Render a partial with explicit variables
+{{ template("partials/header", headerData) }}
+
+// Alias
+{{ include("partials/footer", footerData) }}
+```
+
+Note: you must pass the variables explicitly (e.g., `headerData`), as Vision does not implicitly capture the parent scope for includes.
+
+### Supported File Extensions
+
+When calling `render('template')` without an extension, Vision will try the following in order:
+
+1. `.html.vis` (recommended for Vision templates)
+2. `.vis`
+3. `.php`
+4. `.html`
+
+Examples:
+
+```php
+// Automatically loads templates/welcome.html.vis if present
+$vision->render('welcome');
+
+// Explicitly load a .vis file
+$vision->render('email/welcome.vis');
+```
+
 ### Nested variables
 
 You can access nested properties with dot notation :

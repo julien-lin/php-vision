@@ -143,6 +143,48 @@ $html = $vision->renderString($template, ['name' => 'Julien']);
 // Résultat: "Bonjour Julien !"
 ```
 
+### Extensions de fichiers supportées
+
+Lorsque vous appelez `render('template')` sans extension, Vision essaiera dans cet ordre :
+
+1. `.html.vis` (recommandé pour les templates Vision)
+2. `.vis`
+3. `.php`
+4. `.html`
+
+### Includes simples (partiels)
+
+Vision fournit des fonctions intégrées pour inclure d'autres templates :
+
+```php
+// Rendre un partiel avec des variables explicites
+{{ template("partials/header", headerData) }}
+
+// Alias
+{{ include("partials/footer", footerData) }}
+```
+
+Note : vous devez passer les variables explicitement (ex. `headerData`), car Vision ne capture pas implicitement le scope parent pour les includes.
+
+### Extensions de fichiers supportées
+
+Lorsque vous appelez `render('template')` sans extension, Vision essaiera dans cet ordre :
+
+1. `.html.vis` (recommandé pour les templates Vision)
+2. `.vis`
+3. `.php`
+4. `.html`
+
+Exemples :
+
+```php
+// Charge automatiquement templates/welcome.html.vis si présent
+$vision->render('welcome');
+
+// Charge explicitement un fichier .vis
+$vision->render('email/welcome.vis');
+```
+
 ### Variables imbriquées
 
 Vous pouvez accéder aux propriétés imbriquées avec la notation point :
