@@ -2,7 +2,7 @@
 
 [![PHP Version](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-172%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-204%20passed-success.svg)](tests/)
 
 [🇫🇷 Read in French](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -19,7 +19,7 @@ Vision combines simplicity with enterprise-grade performance through its **optio
 - 🔒 **Secure by Default** - Auto-escaping, path traversal protection, XSS prevention
 - 🎯 **Simple Syntax** - Variables `{{ var }}`, filters `|upper`, structures `{% if %}`
 - 🏗️ **Modular Architecture** - 7 independent modules (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Fully Tested** - 172 tests, 356 assertions, 100% functional coverage
+- 🧪 **Fully Tested** - 204 tests, 419 assertions, 100% functional coverage
 - 🎨 **Extensible** - Custom filters, functions, and processors
 - 📦 **Zero Dependencies** - Standalone, no external packages required
 - 💪 **PHP 8.0+** - Modern PHP with strict typing
@@ -123,6 +123,37 @@ echo $vision->renderString('{{ component("Button", buttonProps) }}', [
 ./vendor/bin/vision fragment:stats --cache=/path/to/cache/fragments
 ```
 
+### Inline Filters (15-30% Faster) ⚡
+
+Vision automatically compiles common filters to native PHP functions instead of calling the FilterManager, providing **15-30% performance improvement** on filter-heavy templates.
+
+**How it works:**
+
+```php
+// Template syntax
+{{ name|upper }}        // Compiled to: strtoupper($name)
+{{ text|trim }}         // Compiled to: trim($text)
+{{ data|json }}         // Compiled to: json_encode($data)
+{{ list|length }}       // Compiled to: count($list)
+{{ html|escape }}       // Compiled to: htmlspecialchars($html, ENT_QUOTES, 'UTF-8')
+{{ text|lower }}        // Compiled to: strtolower($text)
+```
+
+**Inlineable filters** (no runtime overhead):
+- `upper` → `strtoupper()`
+- `lower` → `strtolower()`
+- `trim` → `trim()`
+- `escape` → `htmlspecialchars()`
+- `length` → `count()` or `strlen()`
+- `json` → `json_encode()`
+
+**Non-inlineable filters** (still use FilterManager):
+- `default` - Requires parameter evaluation
+- `date` - Complex formatting with parameters
+- `number` - Complex formatting with parameters
+
+**Automatic optimization** - No configuration needed! The compiler automatically detects and inlines supported filters during template compilation.
+
 ### Direct String Rendering
 
 ```php
@@ -167,6 +198,7 @@ Vision (Orchestrator)
 - ✅ **Smart Caching** - Multi-level with TTL and automatic invalidation
 - ✅ **Fragment Caching** - Cache components by props for massive performance gains
 - ✅ **Constant Folding** - Pre-calculate constant expressions at compile time (10-20% faster)
+- ✅ **Inline Filters** - Compile common filters to native PHP (15-30% faster)
 - ✅ **Compilation** - Optional PHP compilation for extreme performance
 - ✅ **CLI Tools** - Cache management, compilation, and statistics commands
 
