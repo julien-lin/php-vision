@@ -16,4 +16,11 @@ enum TokenType: string
     case ELSE = 'else';
     case IF_END = 'if_end';
     case COMMENT = 'comment';
+    case EXTENDS = 'extends';
+    case BLOCK_START = 'block_start';
+    case BLOCK_END = 'block_end';
+    case PARENT = 'parent';
+    case MACRO_START = 'macro_start';
+    case MACRO_END = 'macro_end';
+    case IMPORT = 'import';
 }

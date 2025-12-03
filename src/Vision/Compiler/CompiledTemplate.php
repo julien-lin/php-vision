@@ -17,7 +17,7 @@ class CompiledTemplate
         public readonly string $phpCode,
         public readonly ParsedTemplate $parsed
     ) {}
-    
+
     /**
      * Sauvegarde le code compilé dans un fichier
      */
@@ -25,7 +25,7 @@ class CompiledTemplate
     {
         return file_put_contents($filePath, $this->phpCode) !== false;
     }
-    
+
     /**
      * Exécute le code compilé avec les variables données
      * 
@@ -34,11 +34,13 @@ class CompiledTemplate
      */
     public function execute(array $__variables = [], array $__helpers = []): string
     {
+        // Mode debug supprimé pour la production
+
         // Utiliser une closure pour isoler l'exécution
-        $executor = function() use ($__variables, $__helpers) {
+        $executor = function () use ($__variables, $__helpers) {
             return eval('?>' . $this->phpCode);
         };
-        
+
         return $executor();
     }
 }

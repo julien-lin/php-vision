@@ -19,12 +19,39 @@ class TemplateCompiler
     private FilterInliner $filterInliner;
     private DeadBranchEliminator $branchEliminator;
     private ?CompilationRateLimiter $rateLimiter = null;
+    private ?InheritanceResolver $inheritanceResolver = null;
+    private ?MacroProcessor $macroProcessor = null;
+
+    /**
+     * Registre des macros pour le template en cours de compilation
+     */
+    private ?MacroRegistry $currentMacros = null;
 
     public function __construct()
     {
         $this->constantFolder = new ConstantFolder();
         $this->filterInliner = new FilterInliner();
         $this->branchEliminator = new DeadBranchEliminator();
+    }
+
+    /**
+     * Définit le résolveur d'héritage
+     * 
+     * @param InheritanceResolver|null $resolver
+     */
+    public function setInheritanceResolver(?InheritanceResolver $resolver): void
+    {
+        $this->inheritanceResolver = $resolver;
+    }
+
+    /**
+     * Définit le processeur de macros
+     * 
+     * @param MacroProcessor|null $processor
+     */
+    public function setMacroProcessor(?MacroProcessor $processor): void
+    {
+        $this->macroProcessor = $processor;
     }
 
     /**
@@ -50,7 +77,7 @@ class TemplateCompiler
      * Compile un template parsé en code PHP
      * 
      * @param ParsedTemplate $parsed Template parsé
-     * @param string|null $templatePath Chemin du template (pour rate limiting)
+     * @param string|null $templatePath Chemin du template (pour rate limiting et héritage)
      * @return CompiledTemplate Template compilé avec le code PHP
      * @throws VisionException Si le rate limit est atteint
      */
@@ -62,13 +89,31 @@ class TemplateCompiler
                 $waitTime = $this->rateLimiter->getWaitTime($templatePath);
                 throw new VisionException(
                     "Rate limit atteint pour la compilation du template '{$templatePath}'. " .
-                    "Attendez {$waitTime} secondes avant de réessayer."
+                        "Attendez {$waitTime} secondes avant de réessayer."
                 );
             }
         }
 
+        // Résoudre l'héritage si un resolver est configuré
+        $ast = $parsed->ast;
+        if ($this->inheritanceResolver !== null && $templatePath !== null) {
+            $ast = $this->inheritanceResolver->resolve($ast, $templatePath);
+        }
+
+        // Traiter les macros si un processeur est configuré
+        if ($this->macroProcessor !== null && $templatePath !== null) {
+            // Extraire les macros définies dans ce template
+            $this->currentMacros = $this->macroProcessor->extractMacros($ast);
+
+            // Traiter les imports de macros
+            $this->macroProcessor->processImports($ast, $this->currentMacros, $templatePath);
+
+            // Supprimer les définitions de macros de l'AST (elles ne doivent pas être rendues)
+            $ast = $this->macroProcessor->removeMacroDefinitions($ast);
+        }
+
         // Optimiser l'AST en éliminant les branches mortes
-        $optimizedAST = $this->branchEliminator->optimize($parsed->ast);
+        $optimizedAST = $this->branchEliminator->optimize($ast);
 
         $phpCode = $this->compileAST($optimizedAST);
 
@@ -120,6 +165,9 @@ class TemplateCompiler
             NodeType::IF_CONDITION => $this->compileIfCondition($node, $indent),
             NodeType::ELSEIF_CONDITION => $this->compileElseIfCondition($node, $indent),
             NodeType::ELSE_CONDITION => $this->compileElseCondition($node, $indent),
+            NodeType::BLOCK => $this->compileBlock($node, $indent),
+            NodeType::EXTENDS => '', // extends déjà résolu par InheritanceResolver
+            NodeType::PARENT => '', // parent() déjà résolu par InheritanceResolver
             NodeType::ROOT => $this->compileChildren($node, $indent),
             default => ''
         };
@@ -143,8 +191,13 @@ class TemplateCompiler
 
         // Extraire le nom de variable et les filtres depuis metadata
         if (isset($node->metadata[1])) {
-            $varName = $node->metadata[1][0];
+            $varName = trim($node->metadata[1][0]);
             $filterChain = isset($node->metadata[2]) ? $node->metadata[2][0] : null;
+
+            // Vérifier si c'est un appel de macro: macroName(...) ou alias.macroName(...)
+            if (preg_match('/^(\w+(?:\.\w+)?)\s*\(([^)]*)\)$/', $varName, $matches)) {
+                return $this->compileMacroCall($matches[1], $matches[2], $indent);
+            }
 
             // Optimisation: vérifier si c'est une expression constante
             $optimized = $this->constantFolder->fold($varName);
@@ -303,6 +356,22 @@ class TemplateCompiler
     }
 
     /**
+     * Compile un block (déjà résolu par InheritanceResolver)
+     * 
+     * Les blocks sont transparents à la compilation: on compile simplement leur contenu
+     */
+    private function compileBlock(ASTNode $node, int $indent): string
+    {
+        $code = '';
+
+        foreach ($node->children as $child) {
+            $code .= $this->compileNode($child, $indent);
+        }
+
+        return $code;
+    }
+
+    /**
      * Compile tous les enfants d'un nœud
      */
     private function compileChildren(ASTNode $node, int $indent): string
@@ -312,5 +381,203 @@ class TemplateCompiler
             $code .= $this->compileNode($child, $indent);
         }
         return $code;
+    }
+
+    /**
+     * Compile un appel de macro
+     * 
+     * @param string $macroRef Référence de la macro (ex: "input" ou "forms.input")
+     * @param string $argsString Arguments sous forme de string (ex: "name, value, type='text'")
+     * @param string $indent Indentation
+     * @return string Code PHP compilé
+     */
+    private function compileMacroCall(string $macroRef, string $argsString, string $indent): string
+    {
+        if ($this->currentMacros === null) {
+            throw new VisionException("Cannot call macro '{$macroRef}': no macros registered");
+        }
+
+        $code = "{$indent}// Macro call: {$macroRef}({$argsString})\n";
+
+        // Déterminer si c'est un appel de macro locale ou importée
+        $macroDefinition = null;
+        if (str_contains($macroRef, '.')) {
+            // Macro importée: alias.macroName
+            [$alias, $macroName] = explode('.', $macroRef, 2);
+            $macroDefinition = $this->currentMacros->getImported($alias, $macroName);
+        } else {
+            // Macro locale
+            $macroDefinition = $this->currentMacros->get($macroRef);
+        }
+
+        // Parser les arguments de l'appel
+        $args = $this->parseMacroCallArguments($argsString);
+
+        // Binder les arguments aux paramètres de la macro
+        $boundArgs = $macroDefinition->bindArguments($args);
+
+        // Créer un contexte de variables pour l'exécution de la macro
+        $code .= "{$indent}\$__macroContext = [];\n";
+        foreach ($boundArgs as $paramName => $argExpr) {
+            // Si l'argument est une variable, la résoudre; sinon c'est une valeur littérale
+            if ($this->isVariableExpression($argExpr)) {
+                $code .= "{$indent}\$__macroContext['{$paramName}'] = \$__helpers['resolveVariable']('{$argExpr}', \$__variables);\n";
+            } else {
+                // Valeur littérale (string, number, etc.)
+                $phpValue = $this->compileLiteralValue($argExpr);
+                $code .= "{$indent}\$__macroContext['{$paramName}'] = {$phpValue};\n";
+            }
+        }
+
+        // Compiler le corps de la macro avec le contexte
+        $code .= "{$indent}\$__savedVariables = \$__variables;\n";
+        $code .= "{$indent}\$__variables = array_merge(\$__variables, \$__macroContext);\n";
+        $code .= "{$indent}// Macro body:\n";
+
+        // Compiler les enfants du body de la macro
+        // Déterminer le niveau d'indentation numérique pour compileNode
+        $indentLevel = (int)(strlen($indent) / 4);
+        foreach ($macroDefinition->body->children as $child) {
+            $code .= $this->compileNode($child, $indentLevel);
+        }
+
+        $code .= "{$indent}\$__variables = \$__savedVariables;\n";
+
+        return $code;
+    }
+
+    /**
+     * Parse les arguments d'un appel de macro
+     * 
+     * Exemples:
+     * - "name, value" => [0 => 'name', 1 => 'value']
+     * - "'name', value" => [0 => "'name'", 1 => 'value']
+     * - "name, value, type='text'" => [0 => 'name', 1 => 'value', 'type' => "'text'"]
+     * 
+     * Note: Les quotes sont PRÉSERVÉES pour permettre de distinguer variables et literals
+     * 
+     * @param string $argsString Arguments sous forme de string
+     * @return array<int|string, string> Arguments parsés (quotes préservées)
+     */
+    private function parseMacroCallArguments(string $argsString): array
+    {
+        $argsString = trim($argsString);
+
+        if ($argsString === '') {
+            return [];
+        }
+
+        $args = [];
+        $parts = $this->splitMacroArguments($argsString);
+
+        foreach ($parts as $part) {
+            $part = trim($part);
+
+            // Argument nommé: name='value' ou name="value" ou name=value
+            if (preg_match('/^(\w+)\s*=\s*(.+)$/', $part, $matches)) {
+                $args[$matches[1]] = trim($matches[2]); // Garde les quotes si présentes
+            }
+            // Argument positionnel
+            else {
+                $args[] = $part; // Garde les quotes si présentes
+            }
+        }
+
+        return $args;
+    }
+
+    /**
+     * Sépare les arguments d'un appel de macro en tenant compte des quotes et parenthèses
+     */
+    private function splitMacroArguments(string $argsString): array
+    {
+        $parts = [];
+        $current = '';
+        $inQuotes = false;
+        $quoteChar = null;
+        $depth = 0; // Profondeur de parenthèses
+
+        for ($i = 0; $i < strlen($argsString); $i++) {
+            $char = $argsString[$i];
+
+            if (($char === '"' || $char === "'") && (!$inQuotes || $char === $quoteChar)) {
+                $inQuotes = !$inQuotes;
+                $quoteChar = $inQuotes ? $char : null;
+                $current .= $char;
+            } elseif ($char === '(' && !$inQuotes) {
+                $depth++;
+                $current .= $char;
+            } elseif ($char === ')' && !$inQuotes) {
+                $depth--;
+                $current .= $char;
+            } elseif ($char === ',' && !$inQuotes && $depth === 0) {
+                $parts[] = $current;
+                $current = '';
+            } else {
+                $current .= $char;
+            }
+        }
+
+        if ($current !== '') {
+            $parts[] = $current;
+        }
+
+        return $parts;
+    }
+
+    /**
+     * Vérifie si une expression est une variable (ex: "user.name" vs "'hello'")
+     */
+    private function isVariableExpression(string $expr): bool
+    {
+        // Si commence par quote, c'est un literal
+        if (preg_match('/^["\']/', $expr)) {
+            return false;
+        }
+
+        // Si c'est un nombre, c'est un literal
+        if (is_numeric($expr)) {
+            return false;
+        }
+
+        // Si c'est true/false/null, c'est un literal
+        if (in_array($expr, ['true', 'false', 'null'], true)) {
+            return false;
+        }
+
+        // Sinon c'est probablement une variable
+        return true;
+    }
+
+    /**
+     * Compile une valeur littérale en PHP
+     */
+    private function compileLiteralValue(string $value): string
+    {
+        // String déjà entre quotes (simple ou double)
+        if (preg_match('/^(["\'])(.*)\\1$/s', $value, $matches)) {
+            return "'" . addcslashes($matches[2], "'\\") . "'";
+        }
+
+        // Nombres
+        if (is_numeric($value)) {
+            return $value;
+        }
+
+        // Booleans
+        if ($value === 'true') {
+            return 'true';
+        }
+        if ($value === 'false') {
+            return 'false';
+        }
+
+        // null
+        if ($value === 'null') {
+            return 'null';
+        }
+
+        // Par défaut, traiter comme string
+        return "'" . addcslashes($value, "'\\") . "'";
     }
 }
