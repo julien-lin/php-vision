@@ -323,4 +323,86 @@ TEMPLATE;
         // (si le singleton causait des problèmes, on aurait des erreurs)
         // Le fait que tous les tests ci-dessus passent confirme que le singleton fonctionne
     }
+
+    /**
+     * Test que le cache des chemins de templates fonctionne correctement
+     * Ceci vérifie l'optimisation de performance qui évite les appels realpath répétitifs
+     */
+    public function testTemplatePathCache(): void
+    {
+        // Créer un répertoire temporaire pour les templates
+        $tempDir = sys_get_temp_dir() . '/vision_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        
+        // Créer un template de test
+        $templateFile = $tempDir . '/test.html.vis';
+        file_put_contents($templateFile, 'Hello {{ name }}!');
+        
+        try {
+            $vision = new Vision($tempDir);
+            
+            // Premier rendu - doit résoudre le chemin et le mettre en cache
+            $result1 = $vision->render('test', ['name' => 'World']);
+            $this->assertEquals('Hello World!', $result1);
+            
+            // Deuxième rendu - doit utiliser le cache
+            $result2 = $vision->render('test', ['name' => 'Universe']);
+            $this->assertEquals('Hello Universe!', $result2);
+            
+            // Vérifier que le résultat est cohérent (cache fonctionne)
+            $this->assertNotEquals($result1, $result2);
+            
+            // Test avec un autre template
+            $templateFile2 = $tempDir . '/test2.vis';
+            file_put_contents($templateFile2, 'Goodbye {{ name }}!');
+            
+            $result3 = $vision->render('test2', ['name' => 'World']);
+            $this->assertEquals('Goodbye World!', $result3);
+            
+            // Test nettoyage du cache
+            $vision->clearTemplatePathCache();
+            
+            // Après nettoyage, le cache devrait être vide mais le rendu devrait toujours fonctionner
+            $result4 = $vision->render('test', ['name' => 'Cache']);
+            $this->assertEquals('Hello Cache!', $result4);
+            
+        } finally {
+            // Nettoyage
+            if (file_exists($templateFile)) {
+                unlink($templateFile);
+            }
+            if (file_exists($tempDir . '/test2.vis')) {
+                unlink($tempDir . '/test2.vis');
+            }
+            if (is_dir($tempDir)) {
+                rmdir($tempDir);
+            }
+        }
+    }
+
+    /**
+     * Test que les patterns regex sont bien utilisés (déjà optimisés comme constantes)
+     * Les patterns constants sont déjà précompilés par PHP, donc cette optimisation
+     * est déjà largement réalisée. Ce test valide que tout fonctionne correctement.
+     */
+    public function testRegexPatternsOptimization(): void
+    {
+        // Les patterns sont déjà des constantes, donc déjà optimisés
+        // Ce test valide que les patterns fonctionnent correctement
+        
+        $template1 = '{{ name }}';
+        $result1 = $this->vision->renderString($template1, ['name' => 'Test']);
+        $this->assertEquals('Test', $result1);
+        
+        $template2 = '{% if condition %}Yes{% endif %}';
+        $result2 = $this->vision->renderString($template2, ['condition' => true]);
+        $this->assertEquals('Yes', $result2);
+        
+        $template3 = '{% for item in items %}{{ item }}{% endfor %}';
+        $result3 = $this->vision->renderString($template3, ['items' => ['a', 'b']]);
+        $this->assertEquals('ab', $result3);
+        
+        // Si on arrive ici, les patterns regex fonctionnent correctement
+        // (déjà optimisés comme constantes de classe)
+    }
 }

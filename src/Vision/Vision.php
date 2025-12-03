@@ -42,6 +42,42 @@ class Vision
     private const PATTERN_QUOTED_STRING = '/^["\'](.{0,1000})["\']$/';
 
     /**
+     * Cache des patterns regex validés (évite validation répétitive)
+     * Les patterns constants sont déjà optimisés par PHP, ce cache valide une fois
+     * Utile pour des patterns dynamiques futurs
+     */
+    private static array $validatedPatterns = [];
+
+    /**
+     * Valide et met en cache un pattern regex
+     * 
+     * Note: Les patterns constants sont déjà optimisés par PHP.
+     * Cette méthode est utile pour valider des patterns dynamiques.
+     * 
+     * @param string $pattern Pattern regex à valider
+     * @return string Pattern validé
+     * @throws VisionException Si le pattern est invalide
+     */
+    private static function getValidatedPattern(string $pattern): string
+    {
+        // Cache hit
+        if (isset(self::$validatedPatterns[$pattern])) {
+            return self::$validatedPatterns[$pattern];
+        }
+        
+        // Valider le pattern (une seule fois)
+        if (@preg_match($pattern, '') === false) {
+            $error = error_get_last();
+            throw new VisionException("Invalid regex pattern: {$pattern}. " . ($error['message'] ?? ''));
+        }
+        
+        // Mettre en cache
+        self::$validatedPatterns[$pattern] = $pattern;
+        
+        return $pattern;
+    }
+
+    /**
      * Limites de sécurité
      */
     private const MAX_RECURSION_DEPTH = 50;
