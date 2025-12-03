@@ -645,9 +645,9 @@ class Vision
                 $parseTime = microtime(true) - $parseStart;
                 $this->metricsCollector?->recordParse($parseTime);
                 
-                // Compiler
+                // Compiler (avec rate limiting si configuré)
                 $compileStart = microtime(true);
-                $compiled = $this->compiler->compile($parsed);
+                $compiled = $this->compiler->compile($parsed, $templatePath);
                 $compileTime = microtime(true) - $compileStart;
                 $this->metricsCollector?->recordCompilation($compileTime);
                 

@@ -5,6 +5,8 @@ namespace JulienLinard\Vision\Tests;
 use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
+use JulienLinard\Vision\Compiler\CompilationRateLimiter;
+use JulienLinard\Vision\Exception\VisionException;
 
 class CompilerTest extends TestCase
 {
@@ -162,5 +164,123 @@ class CompilerTest extends TestCase
                 @unlink($tmpFile);
             }
         }
+    }
+
+    public function testCompilationRateLimiter(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(3, 60); // 3 tentatives max par 60 secondes
+        $templatePath = '/path/to/template.vis';
+        
+        // Premières tentatives doivent passer
+        $this->assertTrue($rateLimiter->checkLimit($templatePath));
+        $this->assertEquals(2, $rateLimiter->getRemainingAttempts($templatePath));
+        
+        $this->assertTrue($rateLimiter->checkLimit($templatePath));
+        $this->assertEquals(1, $rateLimiter->getRemainingAttempts($templatePath));
+        
+        $this->assertTrue($rateLimiter->checkLimit($templatePath));
+        $this->assertEquals(0, $rateLimiter->getRemainingAttempts($templatePath));
+        
+        // La quatrième tentative doit échouer
+        $this->assertFalse($rateLimiter->checkLimit($templatePath));
+        $this->assertEquals(0, $rateLimiter->getRemainingAttempts($templatePath));
+    }
+
+    public function testCompilationRateLimiterDisabled(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(3, 60);
+        $rateLimiter->setEnabled(false);
+        $templatePath = '/path/to/template.vis';
+        
+        // Toutes les tentatives doivent passer si désactivé
+        for ($i = 0; $i < 10; $i++) {
+            $this->assertTrue($rateLimiter->checkLimit($templatePath));
+        }
+    }
+
+    public function testCompilationRateLimiterReset(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(3, 60);
+        $templatePath = '/path/to/template.vis';
+        
+        // Atteindre la limite
+        $rateLimiter->checkLimit($templatePath);
+        $rateLimiter->checkLimit($templatePath);
+        $rateLimiter->checkLimit($templatePath);
+        $this->assertFalse($rateLimiter->checkLimit($templatePath));
+        
+        // Réinitialiser
+        $rateLimiter->reset($templatePath);
+        
+        // Devrait pouvoir compiler à nouveau
+        $this->assertTrue($rateLimiter->checkLimit($templatePath));
+        $this->assertEquals(2, $rateLimiter->getRemainingAttempts($templatePath));
+    }
+
+    public function testCompilationRateLimiterWithCompiler(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(2, 60); // 2 tentatives max
+        $compiler = new TemplateCompiler();
+        $compiler->setRateLimiter($rateLimiter);
+        
+        $parser = new TemplateParser();
+        $templatePath = sys_get_temp_dir() . '/test_rate_limit_' . uniqid() . '.vis';
+        
+        try {
+            file_put_contents($templatePath, 'Hello {{ name }}!');
+            
+            $parsed = $parser->parse(file_get_contents($templatePath));
+            
+            // Première compilation doit passer
+            $compiled1 = $compiler->compile($parsed, $templatePath);
+            $this->assertNotNull($compiled1);
+            
+            // Deuxième compilation doit passer
+            $compiled2 = $compiler->compile($parsed, $templatePath);
+            $this->assertNotNull($compiled2);
+            
+            // Troisième compilation doit échouer
+            $this->expectException(VisionException::class);
+            $this->expectExceptionMessage('Rate limit atteint');
+            $compiler->compile($parsed, $templatePath);
+        } finally {
+            @unlink($templatePath);
+        }
+    }
+
+    public function testCompilationRateLimiterStats(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(5, 120);
+        
+        $stats = $rateLimiter->getStats();
+        $this->assertTrue($stats['enabled']);
+        $this->assertEquals(5, $stats['max_attempts']);
+        $this->assertEquals(120, $stats['window_seconds']);
+        $this->assertEquals(0, $stats['tracked_templates']);
+        
+        // Utiliser le rate limiter
+        $rateLimiter->checkLimit('/path/to/template1.vis');
+        $rateLimiter->checkLimit('/path/to/template2.vis');
+        
+        $stats = $rateLimiter->getStats();
+        $this->assertEquals(2, $stats['tracked_templates']);
+    }
+
+    public function testCompilationRateLimiterWaitTime(): void
+    {
+        $rateLimiter = new CompilationRateLimiter(2, 10); // 2 tentatives max par 10 secondes
+        $templatePath = '/path/to/template.vis';
+        
+        // Premières tentatives
+        $rateLimiter->checkLimit($templatePath);
+        $rateLimiter->checkLimit($templatePath);
+        
+        // Atteindre la limite
+        $this->assertFalse($rateLimiter->checkLimit($templatePath));
+        
+        // Vérifier le temps d'attente
+        $waitTime = $rateLimiter->getWaitTime($templatePath);
+        $this->assertGreaterThan(0, $waitTime);
+        $this->assertLessThanOrEqual(10, $waitTime);
     }
 }
