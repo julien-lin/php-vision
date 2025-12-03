@@ -32,6 +32,8 @@ use JulienLinard\Vision\Cache\CacheManager;
 use JulienLinard\Vision\Cache\TaggedCacheManager;
 use JulienLinard\Vision\Cache\WarmupManager;
 use JulienLinard\Vision\Cache\FragmentCache;
+use JulienLinard\Vision\Runtime\Sandbox;
+use JulienLinard\Vision\Exception\VisionException;
 
 $command = $argv[1] ?? 'help';
 
@@ -39,10 +41,12 @@ match ($command) {
     'help', '-h', '--help' => showHelp(),
     'cache:clear' => cacheClear($argv),
     'cache:stats' => cacheStats($argv),
+    'cache:invalidate-tag' => cacheInvalidateTag($argv),
     'fragment:clear' => fragmentClear($argv),
     'fragment:stats' => fragmentStats($argv),
     'compile' => compileTemplates($argv),
     'warmup' => warmupCache($argv),
+    'validate' => validateTemplates($argv),
     'version' => showVersion(),
     default => unknownCommand($command),
 };
@@ -64,14 +68,18 @@ Commandes disponibles:
   fragment:stats    Afficher les statistiques du cache des fragments
   compile           Précompiler les templates (nécessite --templates et --cache)
   warmup            Préchauffer le cache des templates (nécessite --templates et --cache)
+  validate          Valider les templates (nécessite --templates)
+  cache:invalidate-tag Invalider le cache par tag (nécessite --cache et --tag)
 
 Exemples:
-  vision cache:clear --cache=/path/to/cache
+  vision cache:clear --cache=/path/to/cache [--all] [--old]
   vision cache:stats --cache=/path/to/compiled
+  vision cache:invalidate-tag --cache=/path/to/cache --tag=user
   vision fragment:clear --cache=/path/to/fragments
   vision fragment:stats --cache=/path/to/fragments
   vision compile --templates=/path/to/templates --cache=/path/to/compiled [--tags=tag1,tag2]
   vision warmup --templates=/path/to/templates --cache=/path/to/compiled [--manifest=/path/to/manifest.json]
+  vision validate --templates=/path/to/templates [--sandbox]
 
 HELP;
 }
@@ -85,10 +93,12 @@ function showVersion(): void
 function cacheClear(array $argv): void
 {
     $cacheDir = getOption($argv, '--cache');
+    $all = hasOption($argv, '--all');
+    $old = hasOption($argv, '--old');
 
     if (!$cacheDir) {
         echo "Erreur: --cache requis\n";
-        echo "Usage: vision cache:clear --cache=/path/to/cache\n";
+        echo "Usage: vision cache:clear --cache=/path/to/cache [--all] [--old]\n";
         exit(1);
     }
 
@@ -97,19 +107,32 @@ function cacheClear(array $argv): void
         exit(1);
     }
 
-    $files = glob($cacheDir . '/*.cache');
-    $phpFiles = glob($cacheDir . '/*.php');
-    $allFiles = array_merge($files ?: [], $phpFiles ?: []);
+    $cacheManager = new CacheManager($cacheDir, 3600);
+    
+    if ($all) {
+        // Supprimer tout
+        $deleted = $cacheManager->clear(0);
+        echo "✓ Cache complètement nettoyé: $deleted fichier(s) supprimé(s)\n";
+    } elseif ($old) {
+        // Supprimer seulement les fichiers expirés
+        $deleted = $cacheManager->clear(3600); // TTL par défaut
+        echo "✓ Cache des fichiers expirés nettoyé: $deleted fichier(s) supprimé(s)\n";
+    } else {
+        // Comportement par défaut: supprimer les fichiers .cache et .php
+        $files = glob($cacheDir . '/*.cache');
+        $phpFiles = glob($cacheDir . '/*.php');
+        $allFiles = array_merge($files ?: [], $phpFiles ?: []);
 
-    $deleted = 0;
-    foreach ($allFiles as $file) {
-        if (is_file($file)) {
-            unlink($file);
-            $deleted++;
+        $deleted = 0;
+        foreach ($allFiles as $file) {
+            if (is_file($file)) {
+                unlink($file);
+                $deleted++;
+            }
         }
-    }
 
-    echo "✓ Cache nettoyé: $deleted fichier(s) supprimé(s)\n";
+        echo "✓ Cache nettoyé: $deleted fichier(s) supprimé(s)\n";
+    }
 }
 
 function cacheStats(array $argv): void
@@ -132,12 +155,24 @@ function cacheStats(array $argv): void
 
     echo "Statistiques du cache:\n";
     echo "  Répertoire: $cacheDir\n";
-    echo "  Nombre de fichiers: {$stats['total']}\n";
+    echo "  Nombre de fichiers: {$stats['count']}\n";
     echo "  Taille totale: " . formatBytes($stats['size']) . "\n";
 
-    if ($stats['oldest'] > 0) {
+    if ($stats['oldest'] !== null) {
         $oldestDate = date('Y-m-d H:i:s', $stats['oldest']);
         echo "  Plus ancien: $oldestDate\n";
+    }
+    
+    if ($stats['newest'] !== null) {
+        $newestDate = date('Y-m-d H:i:s', $stats['newest']);
+        echo "  Plus récent: $newestDate\n";
+    }
+    
+    // Vérifier si TaggedCacheManager est utilisé
+    $taggedCache = new TaggedCacheManager($cacheDir, 3600);
+    $tags = $taggedCache->getTags();
+    if (!empty($tags)) {
+        echo "  Tags disponibles: " . implode(', ', $tags) . "\n";
     }
 }
 
@@ -375,6 +410,99 @@ function getOption(array $argv, string $option): ?string
         }
     }
     return null;
+}
+
+function hasOption(array $argv, string $option): bool
+{
+    return in_array($option, $argv, true);
+}
+
+function cacheInvalidateTag(array $argv): void
+{
+    $cacheDir = getOption($argv, '--cache');
+    $tag = getOption($argv, '--tag');
+
+    if (!$cacheDir || !$tag) {
+        echo "Erreur: --cache et --tag requis\n";
+        echo "Usage: vision cache:invalidate-tag --cache=/path/to/cache --tag=tagName\n";
+        exit(1);
+    }
+
+    if (!is_dir($cacheDir)) {
+        echo "Erreur: Le répertoire $cacheDir n'existe pas\n";
+        exit(1);
+    }
+
+    $taggedCache = new TaggedCacheManager($cacheDir, 3600);
+    $deleted = $taggedCache->invalidateByTag($tag);
+
+    echo "✓ Cache invalidé pour le tag '$tag': $deleted fichier(s) supprimé(s)\n";
+}
+
+function validateTemplates(array $argv): void
+{
+    $templatesDir = getOption($argv, '--templates');
+    $useSandbox = hasOption($argv, '--sandbox');
+
+    if (!$templatesDir) {
+        echo "Erreur: --templates requis\n";
+        echo "Usage: vision validate --templates=/path/to/templates [--sandbox]\n";
+        exit(1);
+    }
+
+    if (!is_dir($templatesDir)) {
+        echo "Erreur: Le répertoire $templatesDir n'existe pas\n";
+        exit(1);
+    }
+
+    $parser = new TemplateParser();
+    $compiler = new TemplateCompiler();
+    $sandbox = $useSandbox ? new Sandbox() : null;
+    
+    if ($sandbox !== null) {
+        // Configuration sandbox par défaut
+        $sandbox->setAllowedFunctions(['component', 'slot']);
+        $sandbox->setAllowedFilters(['upper', 'lower', 'trim', 'escape']);
+    }
+
+    $templates = findTemplatesRecursive($templatesDir);
+    $valid = 0;
+    $errors = 0;
+
+    echo "Validation des templates...\n";
+    
+    foreach ($templates as $templatePath) {
+        $content = file_get_contents($templatePath);
+        if ($content === false) {
+            $errors++;
+            continue;
+        }
+
+        try {
+            // Validation sandbox si activé
+            if ($sandbox !== null) {
+                $sandbox->validateTemplate($content);
+            }
+            
+            // Parser et compiler pour valider la syntaxe
+            $parsed = $parser->parse($content);
+            $compiler->compile($parsed);
+            
+            $valid++;
+            $relativePath = str_replace($templatesDir . '/', '', $templatePath);
+            echo "  ✓ $relativePath\n";
+        } catch (VisionException $e) {
+            $errors++;
+            $relativePath = str_replace($templatesDir . '/', '', $templatePath);
+            echo "  ✗ $relativePath: {$e->getMessage()}\n";
+        }
+    }
+
+    echo "\n✓ Validation terminée: $valid template(s) valide(s)";
+    if ($errors > 0) {
+        echo ", $errors erreur(s)";
+    }
+    echo "\n";
 }
 
 function formatBytes(int $bytes): string
