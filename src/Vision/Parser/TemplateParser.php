@@ -20,7 +20,21 @@ class TemplateParser
     private const PATTERN_ELSEIF = '/\{%\s*elseif\s+([^%]{1,200})\s*%\}/';
     private const PATTERN_ELSE = '/\{%\s*else\s*%\}/';
     private const PATTERN_ENDIF = '/\{%\s*endif\s*%\}/';
-    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z_][\w\.]{0,100})\s*(?:\|\s*([a-zA-Z_][\w:,\s\'"\[\]]{0,200}))?\s*\}\}/';
+    // Autoriser plus de caractères (dont '@', '/', '?', '#', '&', '=') dans les expressions, notamment à l'intérieur des quotes
+    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z_][^|}]{0,300})\s*(?:\|\s*([a-zA-Z_][^}]{0,200}))?\s*\}\}/s';
+
+    // Template Inheritance patterns
+    private const PATTERN_EXTENDS = '/\{%\s*extends\s+["\']([^"\']+)["\']\s*%\}/';
+    private const PATTERN_BLOCK = '/\{%\s*block\s+(\w+)\s*%\}/';
+    private const PATTERN_ENDBLOCK = '/\{%\s*endblock\s*%\}/';
+    private const PATTERN_PARENT = '/\{\{\s*parent\(\s*\)\s*\}\}/';
+
+    // Macro patterns
+    private const PATTERN_MACRO = '/\{%\s*macro\s+(\w+)\s*\(([^)]*)\)\s*%\}/';
+    private const PATTERN_ENDMACRO = '/\{%\s*endmacro\s*%\}/';
+    private const PATTERN_IMPORT = '/\{%\s*import\s+["\']([^"\']+)["\']\s+as\s+(\w+)\s*%\}/';
+    // Pattern pour appel de macro: {{ macroName(...) }} ou {{ alias.macroName(...) }}
+    private const PATTERN_MACRO_CALL = '/\{\{\s*(\w+(?:\.\w+)?)\s*\(([^}]*)\)\s*\}\}/';
 
     /**
      * Pool d'objets ASTNode (préparé pour future optimisation)
@@ -52,13 +66,13 @@ class TemplateParser
     {
         // 1. Supprimer les commentaires
         $content = $this->removeComments($content);
-        
+
         // 2. Parser la structure en tokens
         $tokens = $this->tokenize($content);
-        
+
         // 3. Construire l'arbre syntaxique
         $ast = $this->buildAST($tokens);
-        
+
         return new ParsedTemplate($content, $tokens, $ast);
     }
 
@@ -88,7 +102,7 @@ class TemplateParser
         while ($offset < $length) {
             // Chercher le prochain tag
             $nextTag = $this->findNextTag($content, $offset);
-            
+
             if ($nextTag === null) {
                 // Plus de tags, ajouter le reste comme texte brut
                 if ($offset < $length) {
@@ -127,6 +141,13 @@ class TemplateParser
     {
         // Liste des patterns à chercher
         $patterns = [
+            ['type' => TokenType::EXTENDS, 'pattern' => self::PATTERN_EXTENDS],
+            ['type' => TokenType::BLOCK_START, 'pattern' => self::PATTERN_BLOCK],
+            ['type' => TokenType::BLOCK_END, 'pattern' => self::PATTERN_ENDBLOCK],
+            ['type' => TokenType::PARENT, 'pattern' => self::PATTERN_PARENT],
+            ['type' => TokenType::MACRO_START, 'pattern' => self::PATTERN_MACRO],
+            ['type' => TokenType::MACRO_END, 'pattern' => self::PATTERN_ENDMACRO],
+            ['type' => TokenType::IMPORT, 'pattern' => self::PATTERN_IMPORT],
             ['type' => TokenType::FOR_START, 'pattern' => self::PATTERN_FOR],
             ['type' => TokenType::FOR_END, 'pattern' => self::PATTERN_ENDFOR],
             ['type' => TokenType::IF_START, 'pattern' => self::PATTERN_IF],
@@ -142,7 +163,7 @@ class TemplateParser
         foreach ($patterns as $patternDef) {
             $type = $patternDef['type'];
             $pattern = $patternDef['pattern'];
-            
+
             if (preg_match($pattern, $content, $matches, PREG_OFFSET_CAPTURE, $offset)) {
                 $position = $matches[0][1];
                 if ($position < $nearestPosition) {
@@ -171,7 +192,7 @@ class TemplateParser
     private function buildAST(array $tokens): ASTNode
     {
         $pool = $this->getNodePool();
-        
+
         $root = $pool->acquire(NodeType::ROOT);
         $stack = [$root];
         $currentParent = $root;
@@ -234,6 +255,49 @@ class TemplateParser
                 case TokenType::IF_END:
                     array_pop($stack);
                     $currentParent = end($stack);
+                    break;
+
+                case TokenType::EXTENDS:
+                    $node = $pool->acquire(NodeType::EXTENDS, $token->value);
+                    $node->metadata = $token->matches;
+                    $currentParent->addChild($node);
+                    break;
+
+                case TokenType::BLOCK_START:
+                    $node = $pool->acquire(NodeType::BLOCK, $token->value);
+                    $node->metadata = $token->matches;
+                    $currentParent->addChild($node);
+                    $stack[] = $node;
+                    $currentParent = $node;
+                    break;
+
+                case TokenType::BLOCK_END:
+                    array_pop($stack);
+                    $currentParent = end($stack);
+                    break;
+
+                case TokenType::PARENT:
+                    $node = $pool->acquire(NodeType::PARENT, $token->value);
+                    $currentParent->addChild($node);
+                    break;
+
+                case TokenType::MACRO_START:
+                    $node = $pool->acquire(NodeType::MACRO, $token->value);
+                    $node->metadata = $token->matches;
+                    $currentParent->addChild($node);
+                    $stack[] = $node;
+                    $currentParent = $node;
+                    break;
+
+                case TokenType::MACRO_END:
+                    array_pop($stack);
+                    $currentParent = end($stack);
+                    break;
+
+                case TokenType::IMPORT:
+                    $node = $pool->acquire(NodeType::IMPORT, $token->value);
+                    $node->metadata = $token->matches;
+                    $currentParent->addChild($node);
                     break;
             }
         }

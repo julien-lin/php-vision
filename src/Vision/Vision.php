@@ -20,6 +20,7 @@ use JulienLinard\Vision\Filters\LengthFilter;
 use JulienLinard\Vision\Filters\JsonFilter;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
+use JulienLinard\Vision\Compiler\InheritanceResolver;
 use JulienLinard\Vision\Cache\CacheManager;
 use JulienLinard\Vision\Cache\FragmentCache;
 use JulienLinard\Vision\Cache\FileStatsCache;
@@ -69,16 +70,16 @@ class Vision
         if (isset(self::$validatedPatterns[$pattern])) {
             return self::$validatedPatterns[$pattern];
         }
-        
+
         // Valider le pattern (une seule fois)
         if (@preg_match($pattern, '') === false) {
             $error = error_get_last();
             throw new VisionException("Invalid regex pattern: {$pattern}. " . ($error['message'] ?? ''));
         }
-        
+
         // Mettre en cache
         self::$validatedPatterns[$pattern] = $pattern;
-        
+
         return $pattern;
     }
 
@@ -133,12 +134,12 @@ class Vision
     private ?CacheManager $cacheManager = null;
     private ?FragmentCache $fragmentCache = null;
     private VariableResolver $resolver;
-    
+
     /**
      * Cache des statistiques de fichiers pour réduire les appels système
      */
     private ?FileStatsCache $fileStatsCache = null;
-    
+
     /**
      * Singleton ControlStructureProcessor pour éviter les allocations répétées
      */
@@ -153,7 +154,7 @@ class Vision
      * Cache des chemins de templates résolus (limité à 500 entrées)
      */
     private array $templatePathCache = [];
-    
+
     private const MAX_TEMPLATE_PATH_CACHE_SIZE = 500;
 
     /**
@@ -273,6 +274,23 @@ class Vision
     public function setCompiler(TemplateCompiler $compiler): self
     {
         $this->compiler = $compiler;
+
+        // Configurer l'InheritanceResolver si parser disponible
+        if ($this->parser !== null) {
+            $resolver = new InheritanceResolver(
+                fn(string $name): string => $this->loadTemplateSource($name),
+                $this->parser
+            );
+            $compiler->setInheritanceResolver($resolver);
+
+            // Configurer le MacroProcessor
+            $macroProcessor = new \JulienLinard\Vision\Compiler\MacroProcessor(
+                fn(string $name): string => $this->loadTemplateSource($name),
+                $this->parser
+            );
+            $compiler->setMacroProcessor($macroProcessor);
+        }
+
         return $this;
     }
 
@@ -442,7 +460,7 @@ class Vision
         if ($this->cacheDir !== null) {
             $health['cache']['directory_writable'] = is_writable($this->cacheDir);
             $health['cache']['directory_exists'] = is_dir($this->cacheDir);
-            
+
             if (!$health['cache']['directory_writable'] || !$health['cache']['directory_exists']) {
                 $health['status'] = 'degraded';
             }
@@ -455,7 +473,7 @@ class Vision
                 'exists' => is_dir($this->templateDir),
                 'readable' => is_readable($this->templateDir),
             ];
-            
+
             if (!$health['templates']['exists'] || !$health['templates']['readable']) {
                 $health['status'] = 'degraded';
             }
@@ -644,13 +662,13 @@ class Vision
                 $parsed = $this->parser->parse($content);
                 $parseTime = microtime(true) - $parseStart;
                 $this->metricsCollector?->recordParse($parseTime);
-                
+
                 // Compiler (avec rate limiting si configuré)
                 $compileStart = microtime(true);
                 $compiled = $this->compiler->compile($parsed, $templatePath);
                 $compileTime = microtime(true) - $compileStart;
                 $this->metricsCollector?->recordCompilation($compileTime);
-                
+
                 // Sauvegarder en cache
                 $this->cacheManager->saveCompiled($templatePath, $compiled);
                 $this->logger?->debug('Template compiled and cached', ['template' => $template]);
@@ -673,11 +691,11 @@ class Vision
             ];
 
             $result = $compiled->execute($variables, $helpers);
-            
+
             // Enregistrer les métriques
             $renderTime = microtime(true) - $startTime;
             $this->metricsCollector?->recordRender($renderTime, $cacheHit);
-            
+
             return $result;
         }
 
@@ -730,10 +748,10 @@ class Vision
         }
 
         // Vérifier la limite de récursion (utiliser celle du sandbox si défini)
-        $maxDepth = $this->sandbox !== null 
-            ? $this->sandbox->getMaxRecursionDepth() 
+        $maxDepth = $this->sandbox !== null
+            ? $this->sandbox->getMaxRecursionDepth()
             : self::MAX_RECURSION_DEPTH;
-            
+
         if ($depth > $maxDepth) {
             throw new VisionException(
                 "Profondeur de récursion maximale atteinte (" . $maxDepth . "). " .
@@ -770,7 +788,7 @@ class Vision
         if ($this->structureProcessor === null) {
             $this->structureProcessor = new ControlStructureProcessor();
         }
-        
+
         return $this->structureProcessor->process(
             $content,
             $variables,
@@ -1110,6 +1128,26 @@ class Vision
     {
         $this->templatePathCache = [];
         $this->cachedRealBasePath = null;
+    }
+
+    /**
+     * Charge le contenu d'un template par son nom
+     * Utilisé par InheritanceResolver pour charger les parents
+     * 
+     * @param string $templateName Nom du template (ex: "base.html")
+     * @return string Contenu du template
+     * @throws TemplateNotFoundException Si le template n'existe pas
+     */
+    private function loadTemplateSource(string $templateName): string
+    {
+        $path = $this->getTemplatePath($templateName);
+        $content = file_get_contents($path);
+
+        if ($content === false) {
+            throw new TemplateNotFoundException($templateName);
+        }
+
+        return $content;
     }
 
     /**

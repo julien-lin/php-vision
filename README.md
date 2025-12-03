@@ -2,7 +2,7 @@
 
 [![PHP Version](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-230%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-294%20passed-success.svg)](tests/)
 
 [🇫🇷 Read in French](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -16,10 +16,11 @@ Vision combines simplicity with enterprise-grade performance through its **optio
 
 - 🚀 **Blazing Fast** - Optional compilation pipeline (0.5ms vs 17ms average)
 - ⚡ **Fragment Caching** - Cache components individually for 50-80% performance boost
+- 🏗️ **Template Inheritance** - `{% extends %}` / `{% block %}` / `{{ parent() }}` like Twig
 - 🔒 **Secure by Default** - Auto-escaping, path traversal protection, XSS prevention
 - 🎯 **Simple Syntax** - Variables `{{ var }}`, filters `|upper`, structures `{% if %}`
-- 🏗️ **Modular Architecture** - 7 independent modules (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Fully Tested** - 230 tests, 486 assertions, 100% functional coverage
+- 🏛️ **Modular Architecture** - 7 independent modules (Parser, Compiler, Cache, Filters, Runtime)
+- 🧪 **Fully Tested** - 294 tests, 725 assertions, 100% functional coverage
 - 🎨 **Extensible** - Custom filters, functions, and processors
 - 📦 **Zero Dependencies** - Standalone, no external packages required
 - 💪 **PHP 8.0+** - Modern PHP with strict typing
@@ -474,6 +475,58 @@ In a loop, you have access to the `loop` variable :
     {% if loop.last %}Last item{% endif %}
 {% endfor %}
 ```
+
+### Template Inheritance 🎨
+
+Vision supports template inheritance like Twig, allowing you to create reusable layouts.
+
+**Base template** (`base.html`):
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}Default Title{% endblock %}</title>
+</head>
+<body>
+    <header>{% block header %}Default Header{% endblock %}</header>
+    <main>{% block content %}Default Content{% endblock %}</main>
+    <footer>{% block footer %}© 2025{% endblock %}</footer>
+</body>
+</html>
+```
+
+**Child template** (`page.html`):
+```twig
+{% extends "base.html" %}
+
+{% block title %}My Custom Page{% endblock %}
+
+{% block content %}
+    <h1>Welcome!</h1>
+    <p>This is my custom content.</p>
+{% endblock %}
+```
+
+**Usage**:
+```php
+// Requires compiled pipeline
+$vision->setParser(new TemplateParser());
+$vision->setCompiler(new TemplateCompiler());
+$vision->setCacheManager(new CacheManager('/cache'));
+$vision->setCache(true, '/cache');
+
+$html = $vision->render('page.html');
+```
+
+**Features**:
+- `{% extends "parent.html" %}` - Inherit from parent template
+- `{% block name %}...{% endblock %}` - Define replaceable blocks
+- `{{ parent() }}` - Include parent block content
+- Multi-level inheritance (grandchild → child → parent)
+- Nested blocks support
+- Compile-time resolution (0ms runtime overhead)
+
+📖 **[Full Template Inheritance Documentation](TEMPLATE_INHERITANCE.md)**
 
 ### Auto escaping
 
