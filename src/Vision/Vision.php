@@ -25,6 +25,7 @@ use JulienLinard\Vision\Cache\FragmentCache;
 use JulienLinard\Vision\Runtime\VariableResolver;
 use JulienLinard\Vision\Runtime\ControlStructureProcessor;
 use JulienLinard\Vision\Runtime\SafeString;
+use JulienLinard\Vision\Runtime\Sandbox;
 
 /**
  * Moteur de template Vision
@@ -145,6 +146,11 @@ class Vision
     private array $templatePathCache = [];
     
     private const MAX_TEMPLATE_PATH_CACHE_SIZE = 500;
+
+    /**
+     * Mode sandbox pour templates non-fiables
+     */
+    private ?Sandbox $sandbox = null;
 
     /**
      * Constructeur
@@ -275,6 +281,28 @@ class Vision
     public function getFragmentCache(): ?FragmentCache
     {
         return $this->fragmentCache;
+    }
+
+    /**
+     * Active le mode sandbox pour templates non-fiables
+     * 
+     * @param Sandbox $sandbox Instance Sandbox configurée
+     * @return self
+     */
+    public function setSandbox(Sandbox $sandbox): self
+    {
+        $this->sandbox = $sandbox;
+        return $this;
+    }
+
+    /**
+     * Obtient le Sandbox si configuré
+     * 
+     * @return Sandbox|null
+     */
+    public function getSandbox(): ?Sandbox
+    {
+        return $this->sandbox;
     }
 
     /**
@@ -485,10 +513,19 @@ class Vision
      */
     public function renderString(string $content, array $variables = [], int $depth = 0): string
     {
-        // Vérifier la limite de récursion
-        if ($depth > self::MAX_RECURSION_DEPTH) {
+        // Valider avec sandbox si activé (seulement au premier niveau)
+        if ($depth === 0 && $this->sandbox !== null) {
+            $this->sandbox->validateTemplate($content);
+        }
+
+        // Vérifier la limite de récursion (utiliser celle du sandbox si défini)
+        $maxDepth = $this->sandbox !== null 
+            ? $this->sandbox->getMaxRecursionDepth() 
+            : self::MAX_RECURSION_DEPTH;
+            
+        if ($depth > $maxDepth) {
             throw new VisionException(
-                "Profondeur de récursion maximale atteinte (" . self::MAX_RECURSION_DEPTH . "). " .
+                "Profondeur de récursion maximale atteinte (" . $maxDepth . "). " .
                     "Vérifiez vos templates pour des boucles ou conditions imbriquées trop profondes."
             );
         }
@@ -653,8 +690,17 @@ class Vision
         $parts = explode('|', $expression);
         $variablePart = trim(array_shift($parts) ?? '');
 
-        // Obtenir la valeur de la variable
-        $value = $this->getNestedValue($variables, $variablePart);
+        // Obtenir la valeur de la variable ou chaîne littérale
+        if (preg_match(self::PATTERN_QUOTED_STRING, $variablePart, $matches)) {
+            // C'est une chaîne littérale entre guillemets
+            $value = $matches[1];
+        } elseif (is_numeric($variablePart)) {
+            // C'est un nombre
+            $value = str_contains($variablePart, '.') ? (float)$variablePart : (int)$variablePart;
+        } else {
+            // C'est une variable
+            $value = $this->getNestedValue($variables, $variablePart);
+        }
 
         // Déterminer si un filtre "safe" a été appliqué (qui ne nécessite pas d'échappement)
         $safeFilters = ['escape', 'json', 'number'];
