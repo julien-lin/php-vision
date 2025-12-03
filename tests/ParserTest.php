@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Parser\TokenType;
 use JulienLinard\Vision\Parser\NodeType;
+use JulienLinard\Vision\Parser\ASTNodePool;
 use JulienLinard\Vision\Exception\VisionException;
 
 class ParserTest extends TestCase
@@ -184,5 +185,44 @@ class ParserTest extends TestCase
         $this->assertGreaterThan(5, count($parsed->tokens));
         $this->assertEquals(NodeType::ROOT, $parsed->ast->type);
         $this->assertNotEmpty($parsed->ast->children);
+    }
+
+    /**
+     * Test que ASTNodePool fonctionne correctement
+     * 
+     * Note: Avec les propriétés readonly de ASTNode, la vraie réutilisation
+     * n'est pas possible, mais le pool nettoie les références pour aider le GC.
+     */
+    public function testASTNodePool(): void
+    {
+        $pool = new ASTNodePool();
+        
+        // Acquérir des nœuds
+        $node1 = $pool->acquire(NodeType::TEXT, 'Hello');
+        $this->assertEquals(NodeType::TEXT, $node1->type);
+        $this->assertEquals('Hello', $node1->value);
+        
+        $node2 = $pool->acquire(NodeType::VARIABLE, 'name');
+        $this->assertEquals(NodeType::VARIABLE, $node2->type);
+        $this->assertEquals('name', $node2->value);
+        
+        // Libérer les nœuds (nettoie les références)
+        $node1->addChild($node2);
+        $this->assertNotEmpty($node1->children);
+        
+        $pool->release($node1);
+        // Après release, les enfants devraient être nettoyés
+        $this->assertEmpty($node1->children);
+        
+        // Test statistiques
+        $stats = $pool->getStats();
+        $this->assertIsArray($stats);
+        $this->assertArrayHasKey('total_nodes', $stats);
+        $this->assertArrayHasKey('pool_size', $stats);
+        
+        // Test nettoyage
+        $pool->clear();
+        $statsAfter = $pool->getStats();
+        $this->assertEquals(0, $statsAfter['total_nodes']);
     }
 }

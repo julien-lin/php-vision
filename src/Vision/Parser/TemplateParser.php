@@ -23,6 +23,25 @@ class TemplateParser
     private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z_][\w\.]{0,100})\s*(?:\|\s*([a-zA-Z_][\w:,\s\'"\[\]]{0,200}))?\s*\}\}/';
 
     /**
+     * Pool d'objets ASTNode (préparé pour future optimisation)
+     * 
+     * Note: Actuellement limité car ASTNode utilise des propriétés readonly.
+     * Le pool nettoie les références pour aider le GC.
+     */
+    private ?ASTNodePool $nodePool = null;
+
+    /**
+     * Obtient ou crée le pool de nœuds
+     */
+    private function getNodePool(): ASTNodePool
+    {
+        if ($this->nodePool === null) {
+            $this->nodePool = new ASTNodePool();
+        }
+        return $this->nodePool;
+    }
+
+    /**
      * Parse un template en une structure de données analysable
      * 
      * @param string $content Contenu brut du template
@@ -151,24 +170,27 @@ class TemplateParser
      */
     private function buildAST(array $tokens): ASTNode
     {
-        $root = new ASTNode(NodeType::ROOT);
+        $pool = $this->getNodePool();
+        
+        $root = $pool->acquire(NodeType::ROOT);
         $stack = [$root];
         $currentParent = $root;
 
         foreach ($tokens as $token) {
             switch ($token->type) {
                 case TokenType::TEXT:
-                    $currentParent->addChild(new ASTNode(NodeType::TEXT, $token->value));
+                    $node = $pool->acquire(NodeType::TEXT, $token->value);
+                    $currentParent->addChild($node);
                     break;
 
                 case TokenType::VARIABLE:
-                    $node = new ASTNode(NodeType::VARIABLE, $token->value);
+                    $node = $pool->acquire(NodeType::VARIABLE, $token->value);
                     $node->metadata = $token->matches;
                     $currentParent->addChild($node);
                     break;
 
                 case TokenType::FOR_START:
-                    $node = new ASTNode(NodeType::FOR_LOOP, $token->value);
+                    $node = $pool->acquire(NodeType::FOR_LOOP, $token->value);
                     $node->metadata = $token->matches;
                     $currentParent->addChild($node);
                     $stack[] = $node;
@@ -181,7 +203,7 @@ class TemplateParser
                     break;
 
                 case TokenType::IF_START:
-                    $node = new ASTNode(NodeType::IF_CONDITION, $token->value);
+                    $node = $pool->acquire(NodeType::IF_CONDITION, $token->value);
                     $node->metadata = $token->matches;
                     $currentParent->addChild($node);
                     $stack[] = $node;
@@ -192,7 +214,7 @@ class TemplateParser
                     // Remonter au parent IF
                     array_pop($stack);
                     $ifNode = end($stack);
-                    $node = new ASTNode(NodeType::ELSEIF_CONDITION, $token->value);
+                    $node = $pool->acquire(NodeType::ELSEIF_CONDITION, $token->value);
                     $node->metadata = $token->matches;
                     $ifNode->addChild($node);
                     $stack[] = $node;
@@ -203,7 +225,7 @@ class TemplateParser
                     // Remonter au parent IF
                     array_pop($stack);
                     $ifNode = end($stack);
-                    $node = new ASTNode(NodeType::ELSE_CONDITION, $token->value);
+                    $node = $pool->acquire(NodeType::ELSE_CONDITION, $token->value);
                     $ifNode->addChild($node);
                     $stack[] = $node;
                     $currentParent = $node;
