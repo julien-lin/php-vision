@@ -9,6 +9,7 @@ use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Cache\WarmupManager;
 use JulienLinard\Vision\Cache\TaggedCacheManager;
 use JulienLinard\Vision\Cache\FileStatsCache;
+use JulienLinard\Vision\Cache\AsyncCacheWriter;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Exception\VisionException;
@@ -607,5 +608,131 @@ class CacheTest extends TestCase
                 @rmdir($cacheDir);
             }
         }
+    }
+
+    public function testAsyncCacheWriter(): void
+    {
+        $asyncWriter = new AsyncCacheWriter(true);
+        
+        // Créer un fichier temporaire
+        $testFile = sys_get_temp_dir() . '/test_async_' . uniqid() . '.txt';
+        
+        try {
+            // Ajouter une écriture à la queue
+            $asyncWriter->enqueueWrite($testFile, 'Test content');
+            
+            // Vérifier que la queue contient un élément
+            $this->assertEquals(1, $asyncWriter->getQueueSize());
+            
+            // Traiter la queue manuellement (simuler le shutdown)
+            // Note: En production, cela se fait automatiquement via register_shutdown_function
+            $reflection = new \ReflectionClass($asyncWriter);
+            $method = $reflection->getMethod('processQueue');
+            $method->setAccessible(true);
+            $method->invoke($asyncWriter);
+            
+            // Vérifier que le fichier a été écrit
+            $this->assertFileExists($testFile);
+            $this->assertEquals('Test content', file_get_contents($testFile));
+            
+            // Vérifier que la queue est vide
+            $this->assertEquals(0, $asyncWriter->getQueueSize());
+        } finally {
+            @unlink($testFile);
+        }
+    }
+
+    public function testAsyncCacheWriterDisabled(): void
+    {
+        $asyncWriter = new AsyncCacheWriter(false);
+        
+        // Créer un fichier temporaire
+        $testFile = sys_get_temp_dir() . '/test_async_disabled_' . uniqid() . '.txt';
+        
+        try {
+            // Ajouter une écriture (devrait être synchrone)
+            $asyncWriter->enqueueWrite($testFile, 'Test content');
+            
+            // Vérifier que le fichier a été écrit immédiatement (synchrone)
+            $this->assertFileExists($testFile);
+            $this->assertEquals('Test content', file_get_contents($testFile));
+            
+            // Vérifier que la queue est vide
+            $this->assertEquals(0, $asyncWriter->getQueueSize());
+        } finally {
+            @unlink($testFile);
+        }
+    }
+
+    public function testAsyncCacheWriterWithCacheManager(): void
+    {
+        $cacheDir = sys_get_temp_dir() . '/vision_async_test_' . uniqid();
+        $asyncWriter = new AsyncCacheWriter(true);
+        $cacheManager = new \JulienLinard\Vision\Cache\CacheManager($cacheDir, 3600, false);
+        $cacheManager->setAsyncWriter($asyncWriter);
+        
+        // Créer un template temporaire
+        $templateFile = sys_get_temp_dir() . '/test_template_' . uniqid() . '.vis';
+        file_put_contents($templateFile, 'Hello {{ name }}!');
+        
+        try {
+            $parser = new TemplateParser();
+            $compiler = new TemplateCompiler();
+            
+            // Parser et compiler
+            $parsed = $parser->parse(file_get_contents($templateFile));
+            $compiled = $compiler->compile($parsed);
+            
+            // Sauvegarder dans le cache (devrait utiliser AsyncCacheWriter)
+            $result = $cacheManager->saveCompiled($templateFile, $compiled);
+            $this->assertTrue($result);
+            
+            // Vérifier que la queue contient un élément
+            $this->assertEquals(1, $asyncWriter->getQueueSize());
+            
+            // Traiter la queue manuellement
+            $reflection = new \ReflectionClass($asyncWriter);
+            $method = $reflection->getMethod('processQueue');
+            $method->setAccessible(true);
+            $method->invoke($asyncWriter);
+            
+            // Vérifier que le cache a été écrit
+            $cached = $cacheManager->getCompiled($templateFile);
+            $this->assertNotNull($cached);
+            $this->assertEquals($compiled->phpCode, $cached->phpCode);
+        } finally {
+            @unlink($templateFile);
+            // Nettoyer le cache
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
+        }
+    }
+
+    public function testAsyncCacheWriterClearQueue(): void
+    {
+        $asyncWriter = new AsyncCacheWriter(true);
+        
+        // Ajouter plusieurs écritures
+        $asyncWriter->enqueueWrite('/tmp/test1.txt', 'Content 1');
+        $asyncWriter->enqueueWrite('/tmp/test2.txt', 'Content 2');
+        $asyncWriter->enqueueWrite('/tmp/test3.txt', 'Content 3');
+        
+        // Vérifier que la queue contient 3 éléments
+        $this->assertEquals(3, $asyncWriter->getQueueSize());
+        
+        // Vider la queue
+        $asyncWriter->clearQueue();
+        
+        // Vérifier que la queue est vide
+        $this->assertEquals(0, $asyncWriter->getQueueSize());
     }
 }

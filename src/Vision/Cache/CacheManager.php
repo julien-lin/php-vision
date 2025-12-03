@@ -5,6 +5,7 @@ namespace JulienLinard\Vision\Cache;
 use JulienLinard\Vision\Exception\VisionException;
 use JulienLinard\Vision\Parser\ParsedTemplate;
 use JulienLinard\Vision\Compiler\CompiledTemplate;
+use JulienLinard\Vision\Cache\AsyncCacheWriter;
 
 /**
  * Gestionnaire de cache pour les templates Vision
@@ -21,10 +22,12 @@ class CacheManager
     private const LOCK_RETRY_INTERVAL = 50000; // microsecondes (50ms)
 
     private ?FileStatsCache $fileStatsCache = null;
+    private ?AsyncCacheWriter $asyncWriter = null;
 
     public function __construct(
         private readonly string $cacheDir,
-        private readonly int $ttl = 3600
+        private readonly int $ttl = 3600,
+        bool $asyncWrites = false
     ) {
         // Créer le répertoire de cache s'il n'existe pas
         if (!is_dir($this->cacheDir)) {
@@ -32,6 +35,31 @@ class CacheManager
                 throw new VisionException("Impossible de créer le répertoire de cache: {$this->cacheDir}");
             }
         }
+
+        // Initialiser l'écriture asynchrone si demandée
+        if ($asyncWrites) {
+            $this->asyncWriter = new AsyncCacheWriter(true);
+        }
+    }
+
+    /**
+     * Définit l'écrivain asynchrone pour les écritures de cache
+     * 
+     * @param AsyncCacheWriter|null $asyncWriter
+     */
+    public function setAsyncWriter(?AsyncCacheWriter $asyncWriter): void
+    {
+        $this->asyncWriter = $asyncWriter;
+    }
+
+    /**
+     * Obtient l'écrivain asynchrone
+     * 
+     * @return AsyncCacheWriter|null
+     */
+    public function getAsyncWriter(): ?AsyncCacheWriter
+    {
+        return $this->asyncWriter;
     }
 
     /**
@@ -263,9 +291,31 @@ class CacheManager
      * 
      * @param string $cacheFile Fichier de cache
      * @param mixed $data Données à sauvegarder
-     * @return bool Succès de l'écriture
+     * @return bool Succès de l'écriture (ou true si mis en queue asynchrone)
      */
     private function writeCache(string $cacheFile, mixed $data): bool
+    {
+        // Sérialiser les données
+        $serialized = serialize($data);
+
+        // Utiliser l'écriture asynchrone si disponible
+        if ($this->asyncWriter !== null && $this->asyncWriter->isEnabled()) {
+            $this->asyncWriter->enqueueWrite($cacheFile, $serialized);
+            return true; // Considéré comme succès (mis en queue)
+        }
+
+        // Écriture synchrone (fallback)
+        return $this->writeCacheSync($cacheFile, $serialized);
+    }
+
+    /**
+     * Écriture synchrone dans un fichier de cache avec verrouillage
+     * 
+     * @param string $cacheFile Fichier de cache
+     * @param string $serialized Données sérialisées
+     * @return bool Succès de l'écriture
+     */
+    private function writeCacheSync(string $cacheFile, string $serialized): bool
     {
         $fp = @fopen($cacheFile, 'c');
         if ($fp === false) {
@@ -292,8 +342,7 @@ class CacheManager
             ftruncate($fp, 0);
             rewind($fp);
 
-            // Sérialiser et écrire
-            $serialized = serialize($data);
+            // Écrire
             $written = fwrite($fp, $serialized);
 
             flock($fp, LOCK_UN);
