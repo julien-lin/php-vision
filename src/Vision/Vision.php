@@ -99,6 +99,18 @@ class Vision
     private ?ControlStructureProcessor $structureProcessor = null;
 
     /**
+     * Cache du chemin de base des templates (rarement change)
+     */
+    private ?string $cachedRealBasePath = null;
+
+    /**
+     * Cache des chemins de templates résolus (limité à 500 entrées)
+     */
+    private array $templatePathCache = [];
+    
+    private const MAX_TEMPLATE_PATH_CACHE_SIZE = 500;
+
+    /**
      * Constructeur
      *
      * @param string $templateDir Chemin vers le répertoire des templates
@@ -723,6 +735,28 @@ class Vision
             }
         }
 
+        // Cache du base path (rarement change)
+        if ($this->cachedRealBasePath === null && $this->templateDir) {
+            $this->cachedRealBasePath = realpath($this->templateDir);
+            if ($this->cachedRealBasePath === false || !is_dir($this->cachedRealBasePath)) {
+                throw new VisionException("Template directory invalid: {$this->templateDir}");
+            }
+        }
+
+        // Cache hit pour template spécifique (si templateDir est défini)
+        if ($this->templateDir && $this->cachedRealBasePath !== null) {
+            $cacheKey = md5($template . $this->cachedRealBasePath);
+            if (isset($this->templatePathCache[$cacheKey])) {
+                $cachedPath = $this->templatePathCache[$cacheKey];
+                // Vérifier que le fichier existe toujours
+                if (file_exists($cachedPath)) {
+                    return $cachedPath;
+                }
+                // Sinon, invalider le cache
+                unset($this->templatePathCache[$cacheKey]);
+            }
+        }
+
         // Déterminer les candidats d'extension si aucune extension explicite n'est fournie
         $hasExtension = str_contains($template, '.');
         $candidates = [];
@@ -736,19 +770,19 @@ class Vision
             $candidates[] = $template . '.html';
         }
 
-        if ($this->templateDir) {
-            $realBasePath = realpath($this->templateDir);
-            if ($realBasePath === false || !is_dir($realBasePath)) {
-                throw new VisionException("Template directory invalid: {$this->templateDir}");
-            }
-
+        if ($this->templateDir && $this->cachedRealBasePath !== null) {
             foreach ($candidates as $candidate) {
-                $fullPath = $realBasePath . DIRECTORY_SEPARATOR . ltrim($candidate, '\\/');
+                $fullPath = $this->cachedRealBasePath . DIRECTORY_SEPARATOR . ltrim($candidate, '\\/');
                 $realFullPath = realpath($fullPath);
 
                 if ($realFullPath !== false && is_file($realFullPath)) {
                     // Protection stricte: le chemin doit commencer par le base path
-                    if (strpos($realFullPath, $realBasePath . DIRECTORY_SEPARATOR) === 0) {
+                    if (strpos($realFullPath, $this->cachedRealBasePath . DIRECTORY_SEPARATOR) === 0) {
+                        // Mettre en cache (limiter la taille pour éviter fuite mémoire)
+                        if (count($this->templatePathCache) < self::MAX_TEMPLATE_PATH_CACHE_SIZE) {
+                            $cacheKey = md5($template . $this->cachedRealBasePath);
+                            $this->templatePathCache[$cacheKey] = $realFullPath;
+                        }
                         return $realFullPath;
                     }
                 }
@@ -767,6 +801,16 @@ class Vision
         }
 
         throw new TemplateNotFoundException($template);
+    }
+
+    /**
+     * Nettoie le cache des chemins de templates
+     * Utile pour invalider le cache après modification de templates
+     */
+    public function clearTemplatePathCache(): void
+    {
+        $this->templatePathCache = [];
+        $this->cachedRealBasePath = null;
     }
 
     /**
