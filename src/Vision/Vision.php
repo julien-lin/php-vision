@@ -92,6 +92,11 @@ class Vision
     private ?CacheManager $cacheManager = null;
     private ?FragmentCache $fragmentCache = null;
     private VariableResolver $resolver;
+    
+    /**
+     * Singleton ControlStructureProcessor pour éviter les allocations répétées
+     */
+    private ?ControlStructureProcessor $structureProcessor = null;
 
     /**
      * Constructeur
@@ -459,8 +464,12 @@ class Vision
      */
     private function processControlStructures(string $content, array $variables, int $depth): string
     {
-        $processor = new ControlStructureProcessor();
-        return $processor->process(
+        // Singleton pattern : réutiliser l'instance pour éviter les allocations répétées
+        if ($this->structureProcessor === null) {
+            $this->structureProcessor = new ControlStructureProcessor();
+        }
+        
+        return $this->structureProcessor->process(
             $content,
             $variables,
             $depth,
