@@ -219,10 +219,32 @@ class ParserTest extends TestCase
         $this->assertIsArray($stats);
         $this->assertArrayHasKey('total_nodes', $stats);
         $this->assertArrayHasKey('pool_size', $stats);
+        $this->assertArrayHasKey('created', $stats);
+        $this->assertArrayHasKey('reused', $stats);
+        $this->assertArrayHasKey('reuse_rate', $stats);
+        
+        // Test réutilisation : libérer un nœud et le réacquérir
+        $pool->release($node1);
+        $node1Reused = $pool->acquire(NodeType::TEXT, 'Hello');
+        
+        // Vérifier que c'est le même objet (réutilisé)
+        $this->assertSame($node1, $node1Reused);
+        $this->assertEmpty($node1Reused->children); // Doit être nettoyé
+        
+        // Vérifier les statistiques de réutilisation
+        $statsAfter = $pool->getStats();
+        $this->assertGreaterThan(0, $statsAfter['reused']);
+        $this->assertGreaterThan(0, $statsAfter['reuse_rate']);
         
         // Test nettoyage
         $pool->clear();
-        $statsAfter = $pool->getStats();
-        $this->assertEquals(0, $statsAfter['total_nodes']);
+        $statsCleared = $pool->getStats();
+        $this->assertEquals(0, $statsCleared['total_nodes']);
+        
+        // Test reset stats
+        $pool->resetStats();
+        $statsReset = $pool->getStats();
+        $this->assertEquals(0, $statsReset['created']);
+        $this->assertEquals(0, $statsReset['reused']);
     }
 }
