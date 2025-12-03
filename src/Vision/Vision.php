@@ -363,6 +363,122 @@ class Vision
     }
 
     /**
+     * Obtient un rapport de santé (health check)
+     * 
+     * Retourne un tableau avec les informations de santé du système
+     * pour intégration avec des outils de monitoring.
+     * 
+     * @return array<string, mixed> Rapport de santé
+     */
+    public function getHealthCheck(): array
+    {
+        $health = [
+            'status' => 'ok',
+            'timestamp' => date('c'),
+            'cache' => [
+                'enabled' => $this->cacheEnabled,
+                'directory' => $this->cacheDir,
+                'ttl' => $this->cacheTTL,
+            ],
+            'compiled_pipeline' => [
+                'enabled' => $this->parser !== null && $this->compiler !== null && $this->cacheManager !== null,
+                'parser' => $this->parser !== null,
+                'compiler' => $this->compiler !== null,
+                'cache_manager' => $this->cacheManager !== null,
+            ],
+            'fragment_cache' => [
+                'enabled' => $this->fragmentCache !== null && $this->fragmentCache->isEnabled(),
+            ],
+            'sandbox' => [
+                'enabled' => $this->sandbox !== null,
+            ],
+            'memory' => [
+                'usage' => memory_get_usage(true),
+                'usage_formatted' => $this->formatBytesHelper(memory_get_usage(true)),
+                'peak' => memory_get_peak_usage(true),
+                'peak_formatted' => $this->formatBytesHelper(memory_get_peak_usage(true)),
+            ],
+        ];
+
+        // Ajouter les statistiques du cache si disponible
+        if ($this->cacheManager !== null) {
+            try {
+                $cacheStats = $this->cacheManager->getStats();
+                $health['cache']['stats'] = $cacheStats;
+            } catch (\Throwable $e) {
+                $health['cache']['stats_error'] = $e->getMessage();
+                $health['status'] = 'degraded';
+            }
+        }
+
+        // Ajouter les statistiques du fragment cache si disponible
+        if ($this->fragmentCache !== null) {
+            try {
+                $fragmentStats = $this->fragmentCache->getStats();
+                $health['fragment_cache']['stats'] = $fragmentStats;
+            } catch (\Throwable $e) {
+                $health['fragment_cache']['stats_error'] = $e->getMessage();
+                $health['status'] = 'degraded';
+            }
+        }
+
+        // Ajouter les métriques si disponible
+        if ($this->metricsCollector !== null) {
+            try {
+                $metrics = $this->metricsCollector->getSummary();
+                $health['metrics'] = $metrics;
+            } catch (\Throwable $e) {
+                $health['metrics_error'] = $e->getMessage();
+            }
+        }
+
+        // Vérifier l'accessibilité du répertoire de cache
+        if ($this->cacheDir !== null) {
+            $health['cache']['directory_writable'] = is_writable($this->cacheDir);
+            $health['cache']['directory_exists'] = is_dir($this->cacheDir);
+            
+            if (!$health['cache']['directory_writable'] || !$health['cache']['directory_exists']) {
+                $health['status'] = 'degraded';
+            }
+        }
+
+        // Vérifier le répertoire des templates
+        if ($this->templateDir !== null && $this->templateDir !== '') {
+            $health['templates'] = [
+                'directory' => $this->templateDir,
+                'exists' => is_dir($this->templateDir),
+                'readable' => is_readable($this->templateDir),
+            ];
+            
+            if (!$health['templates']['exists'] || !$health['templates']['readable']) {
+                $health['status'] = 'degraded';
+            }
+        }
+
+        return $health;
+    }
+
+    /**
+     * Helper pour formater les bytes
+     * 
+     * @param int $bytes Nombre d'octets
+     * @return string Bytes formatés
+     */
+    private function formatBytesHelper(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $unitIndex = 0;
+        $value = (float)$bytes;
+
+        while ($value >= 1024 && $unitIndex < count($units) - 1) {
+            $value /= 1024;
+            $unitIndex++;
+        }
+
+        return round($value, 2) . ' ' . $units[$unitIndex];
+    }
+
+    /**
      * Enregistre un filtre personnalisé
      *
      * @param FilterInterface $filter

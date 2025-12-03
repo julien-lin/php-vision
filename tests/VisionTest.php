@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Exception\TemplateNotFoundException;
 use JulienLinard\Vision\Exception\InvalidFilterException;
+use JulienLinard\Vision\Runtime\MetricsCollector;
 
 class VisionTest extends TestCase
 {
@@ -404,5 +405,72 @@ TEMPLATE;
         
         // Si on arrive ici, les patterns regex fonctionnent correctement
         // (déjà optimisés comme constantes de classe)
+    }
+
+    public function testHealthCheck(): void
+    {
+        $vision = new Vision();
+        
+        // Health check basique
+        $health = $vision->getHealthCheck();
+        
+        $this->assertIsArray($health);
+        $this->assertArrayHasKey('status', $health);
+        $this->assertArrayHasKey('timestamp', $health);
+        $this->assertArrayHasKey('cache', $health);
+        $this->assertArrayHasKey('compiled_pipeline', $health);
+        $this->assertArrayHasKey('memory', $health);
+        
+        $this->assertContains($health['status'], ['ok', 'degraded']);
+        $this->assertIsBool($health['cache']['enabled']);
+        $this->assertIsBool($health['compiled_pipeline']['enabled']);
+        $this->assertArrayHasKey('usage', $health['memory']);
+        $this->assertArrayHasKey('peak', $health['memory']);
+    }
+
+    public function testHealthCheckWithCache(): void
+    {
+        $cacheDir = sys_get_temp_dir() . '/vision_health_test_' . uniqid();
+        mkdir($cacheDir, 0755, true);
+        
+        try {
+            $vision = new Vision();
+            $vision->setCache(true, $cacheDir, 3600);
+            
+            $health = $vision->getHealthCheck();
+            
+            $this->assertTrue($health['cache']['enabled']);
+            $this->assertTrue($health['cache']['directory_exists']);
+            $this->assertTrue($health['cache']['directory_writable']);
+        } finally {
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
+        }
+    }
+
+    public function testHealthCheckWithMetrics(): void
+    {
+        $vision = new Vision();
+        
+        $collector = new \JulienLinard\Vision\Runtime\MetricsCollector();
+        $vision->setMetricsCollector($collector);
+        
+        // Faire quelques rendus
+        $vision->renderString('Hello {{ name }}!', ['name' => 'World']);
+        
+        $health = $vision->getHealthCheck();
+        
+        $this->assertArrayHasKey('metrics', $health);
+        $this->assertArrayHasKey('renders', $health['metrics']);
+        $this->assertGreaterThan(0, $health['metrics']['renders']['count']);
     }
 }
