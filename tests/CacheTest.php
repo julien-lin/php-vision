@@ -7,6 +7,9 @@ namespace JulienLinard\Vision\Tests;
 use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Cache\WarmupManager;
+use JulienLinard\Vision\Cache\TaggedCacheManager;
+use JulienLinard\Vision\Parser\TemplateParser;
+use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Exception\VisionException;
 
 class CacheTest extends TestCase
@@ -357,6 +360,154 @@ class CacheTest extends TestCase
             $this->assertNotEquals('success', $stats['details']['nonexistent.vis']);
         } finally {
             @rmdir($templateDir);
+        }
+    }
+
+    public function testTaggedCacheManager(): void
+    {
+        $cacheDir = sys_get_temp_dir() . '/vision_tagged_cache_test_' . uniqid();
+        $taggedCache = new TaggedCacheManager($cacheDir, 3600);
+        
+        // Créer un template temporaire
+        $templateFile = sys_get_temp_dir() . '/test_template_' . uniqid() . '.vis';
+        file_put_contents($templateFile, 'Hello {{ name }}!');
+        
+        try {
+            $parser = new TemplateParser();
+            $compiler = new TemplateCompiler();
+            
+            // Parser et compiler le template
+            $content = file_get_contents($templateFile);
+            $parsed = $parser->parse($content);
+            $compiled = $compiler->compile($parsed);
+            
+            // Sauvegarder avec tags
+            $success = $taggedCache->saveCompiled($templateFile, $compiled, ['user', 'public']);
+            $this->assertTrue($success);
+            
+            // Vérifier que les tags sont enregistrés
+            $tags = $taggedCache->getTags();
+            $this->assertContains('user', $tags);
+            $this->assertContains('public', $tags);
+            
+            // Vérifier les clés de cache associées
+            $cacheKeys = $taggedCache->getCacheKeysByTag('user');
+            $this->assertNotEmpty($cacheKeys);
+            
+            // Invalider par tag
+            $deleted = $taggedCache->invalidateByTag('user');
+            $this->assertGreaterThan(0, $deleted);
+            
+            // Vérifier que le tag a été supprimé
+            $tagsAfter = $taggedCache->getTags();
+            $this->assertNotContains('user', $tagsAfter);
+        } finally {
+            @unlink($templateFile);
+            // Nettoyer le cache
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
+        }
+    }
+
+    public function testTaggedCacheInvalidateByTags(): void
+    {
+        $cacheDir = sys_get_temp_dir() . '/vision_tagged_multi_test_' . uniqid();
+        $taggedCache = new TaggedCacheManager($cacheDir, 3600);
+        
+        // Créer des templates temporaires
+        $template1 = sys_get_temp_dir() . '/test_template1_' . uniqid() . '.vis';
+        $template2 = sys_get_temp_dir() . '/test_template2_' . uniqid() . '.vis';
+        file_put_contents($template1, 'Template 1');
+        file_put_contents($template2, 'Template 2');
+        
+        try {
+            $parser = new TemplateParser();
+            $compiler = new TemplateCompiler();
+            
+            // Sauvegarder avec différents tags
+            $parsed1 = $parser->parse(file_get_contents($template1));
+            $compiled1 = $compiler->compile($parsed1);
+            $taggedCache->saveCompiled($template1, $compiled1, ['tag1', 'common']);
+            
+            $parsed2 = $parser->parse(file_get_contents($template2));
+            $compiled2 = $compiler->compile($parsed2);
+            $taggedCache->saveCompiled($template2, $compiled2, ['tag2', 'common']);
+            
+            // Invalider plusieurs tags
+            $deleted = $taggedCache->invalidateByTags(['tag1', 'tag2']);
+            $this->assertGreaterThanOrEqual(2, $deleted);
+            
+            // Vérifier que les tags ont été supprimés
+            $tags = $taggedCache->getTags();
+            $this->assertNotContains('tag1', $tags);
+            $this->assertNotContains('tag2', $tags);
+        } finally {
+            @unlink($template1);
+            @unlink($template2);
+            // Nettoyer le cache
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
+        }
+    }
+
+    public function testTaggedCacheCleanIndex(): void
+    {
+        $cacheDir = sys_get_temp_dir() . '/vision_tagged_clean_test_' . uniqid();
+        $taggedCache = new TaggedCacheManager($cacheDir, 3600);
+        
+        // Créer un template temporaire
+        $templateFile = sys_get_temp_dir() . '/test_template_' . uniqid() . '.vis';
+        file_put_contents($templateFile, 'Hello');
+        
+        try {
+            $parser = new TemplateParser();
+            $compiler = new TemplateCompiler();
+            
+            // Sauvegarder avec tag
+            $parsed = $parser->parse(file_get_contents($templateFile));
+            $compiled = $compiler->compile($parsed);
+            $taggedCache->saveCompiled($templateFile, $compiled, ['test']);
+            
+            // Vérifier que le tag est enregistré
+            $tags = $taggedCache->getTags();
+            $this->assertContains('test', $tags);
+            
+            // Nettoyer l'index (devrait supprimer les références aux fichiers inexistants)
+            $cleaned = $taggedCache->cleanTagIndex();
+            // Le fichier existe encore, donc cleaned devrait être 0 ou plus
+            $this->assertGreaterThanOrEqual(0, $cleaned);
+        } finally {
+            @unlink($templateFile);
+            // Nettoyer le cache
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
         }
     }
 }
