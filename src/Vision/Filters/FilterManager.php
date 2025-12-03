@@ -11,6 +11,14 @@ class FilterManager
 
     private ?EscapeFilter $escapeFilter = null;
 
+    /**
+     * Cache des paramètres de filtres parsés pour éviter le re-parsing répétitif
+     * Limité à 1000 entrées pour éviter les fuites mémoire
+     */
+    private array $parsedParamsCache = [];
+    
+    private const MAX_CACHE_SIZE = 1000;
+
     public function addFilter(FilterInterface $filter): void
     {
         $this->filters[$filter->getName()] = $filter;
@@ -52,12 +60,33 @@ class FilterManager
 
     private function parseParams(string $paramsString): array
     {
+        // Cache hit : retourner directement si déjà parsé
+        if (isset($this->parsedParamsCache[$paramsString])) {
+            return $this->parsedParamsCache[$paramsString];
+        }
+        
+        // Parse les paramètres
         $params = [];
         $parts = explode(',', $paramsString);
         foreach ($parts as $part) {
             $part = trim($part, " '\"");
             $params[] = $part;
         }
+        
+        // Mettre en cache (limiter la taille pour éviter fuite mémoire)
+        if (count($this->parsedParamsCache) < self::MAX_CACHE_SIZE) {
+            $this->parsedParamsCache[$paramsString] = $params;
+        }
+        
         return $params;
+    }
+
+    /**
+     * Nettoie le cache des paramètres parsés
+     * Utile pour libérer la mémoire si nécessaire
+     */
+    public function clearParamsCache(): void
+    {
+        $this->parsedParamsCache = [];
     }
 }

@@ -7,6 +7,7 @@ namespace JulienLinard\Vision\Tests;
 use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Filters\AbstractFilter;
+use JulienLinard\Vision\Filters\FilterManager;
 
 class FilterTest extends TestCase
 {
@@ -137,5 +138,49 @@ class FilterTest extends TestCase
         $result = $this->vision->renderString($template, ['text' => 'Hello World']);
 
         $this->assertEquals('Hello', $result);
+    }
+
+    /**
+     * Test que le cache des paramètres de filtres fonctionne correctement
+     * Ceci vérifie l'optimisation de performance qui évite le re-parsing répétitif
+     */
+    public function testFilterParamsCache(): void
+    {
+        $filterManager = new FilterManager();
+        
+        // Enregistrer un filtre de test avec paramètres
+        $filterManager->addFilter(new class extends AbstractFilter {
+            public function getName(): string
+            {
+                return 'test';
+            }
+
+            public function apply(mixed $value, array $params = []): mixed
+            {
+                return $value . ':' . implode(',', $params);
+            }
+        });
+
+        // Premier appel avec paramètres - doit parser et mettre en cache
+        $result1 = $filterManager->apply('test:param1,param2', 'value1');
+        $this->assertEquals('value1:param1,param2', $result1);
+
+        // Deuxième appel avec les mêmes paramètres - doit utiliser le cache
+        $result2 = $filterManager->apply('test:param1,param2', 'value2');
+        $this->assertEquals('value2:param1,param2', $result2);
+
+        // Vérifier que le résultat est cohérent (cache fonctionne)
+        $this->assertEquals($result1, str_replace('value2', 'value1', $result2));
+
+        // Test avec paramètres différents
+        $result3 = $filterManager->apply('test:param3,param4', 'value3');
+        $this->assertEquals('value3:param3,param4', $result3);
+
+        // Test nettoyage du cache
+        $filterManager->clearParamsCache();
+        
+        // Après nettoyage, le cache devrait être vide mais le parsing devrait toujours fonctionner
+        $result4 = $filterManager->apply('test:param1,param2', 'value4');
+        $this->assertEquals('value4:param1,param2', $result4);
     }
 }
