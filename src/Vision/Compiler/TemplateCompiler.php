@@ -18,6 +18,7 @@ class TemplateCompiler
     private ConstantFolder $constantFolder;
     private FilterInliner $filterInliner;
     private DeadBranchEliminator $branchEliminator;
+    private ?CompilationRateLimiter $rateLimiter = null;
 
     public function __construct()
     {
@@ -25,15 +26,47 @@ class TemplateCompiler
         $this->filterInliner = new FilterInliner();
         $this->branchEliminator = new DeadBranchEliminator();
     }
+
+    /**
+     * Définit le rate limiter pour la compilation
+     * 
+     * @param CompilationRateLimiter|null $rateLimiter
+     */
+    public function setRateLimiter(?CompilationRateLimiter $rateLimiter): void
+    {
+        $this->rateLimiter = $rateLimiter;
+    }
+
+    /**
+     * Obtient le rate limiter
+     * 
+     * @return CompilationRateLimiter|null
+     */
+    public function getRateLimiter(): ?CompilationRateLimiter
+    {
+        return $this->rateLimiter;
+    }
     /**
      * Compile un template parsé en code PHP
      * 
      * @param ParsedTemplate $parsed Template parsé
+     * @param string|null $templatePath Chemin du template (pour rate limiting)
      * @return CompiledTemplate Template compilé avec le code PHP
-     * @throws VisionException
+     * @throws VisionException Si le rate limit est atteint
      */
-    public function compile(ParsedTemplate $parsed): CompiledTemplate
+    public function compile(ParsedTemplate $parsed, ?string $templatePath = null): CompiledTemplate
     {
+        // Vérifier le rate limit si un template path est fourni
+        if ($templatePath !== null && $this->rateLimiter !== null) {
+            if (!$this->rateLimiter->checkLimit($templatePath)) {
+                $waitTime = $this->rateLimiter->getWaitTime($templatePath);
+                throw new VisionException(
+                    "Rate limit atteint pour la compilation du template '{$templatePath}'. " .
+                    "Attendez {$waitTime} secondes avant de réessayer."
+                );
+            }
+        }
+
         // Optimiser l'AST en éliminant les branches mortes
         $optimizedAST = $this->branchEliminator->optimize($parsed->ast);
 
