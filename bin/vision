@@ -29,6 +29,8 @@ use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Cache\CacheManager;
+use JulienLinard\Vision\Cache\TaggedCacheManager;
+use JulienLinard\Vision\Cache\WarmupManager;
 use JulienLinard\Vision\Cache\FragmentCache;
 
 $command = $argv[1] ?? 'help';
@@ -40,6 +42,7 @@ match ($command) {
     'fragment:clear' => fragmentClear($argv),
     'fragment:stats' => fragmentStats($argv),
     'compile' => compileTemplates($argv),
+    'warmup' => warmupCache($argv),
     'version' => showVersion(),
     default => unknownCommand($command),
 };
@@ -60,13 +63,15 @@ Commandes disponibles:
   fragment:clear    Nettoyer le cache des fragments (composants)
   fragment:stats    Afficher les statistiques du cache des fragments
   compile           Précompiler les templates (nécessite --templates et --cache)
+  warmup            Préchauffer le cache des templates (nécessite --templates et --cache)
 
 Exemples:
   vision cache:clear --cache=/path/to/cache
   vision cache:stats --cache=/path/to/compiled
   vision fragment:clear --cache=/path/to/fragments
   vision fragment:stats --cache=/path/to/fragments
-  vision compile --templates=/path/to/templates --cache=/path/to/compiled
+  vision compile --templates=/path/to/templates --cache=/path/to/compiled [--tags=tag1,tag2]
+  vision warmup --templates=/path/to/templates --cache=/path/to/compiled [--manifest=/path/to/manifest.json]
 
 HELP;
 }
@@ -140,10 +145,12 @@ function compileTemplates(array $argv): void
 {
     $templatesDir = getOption($argv, '--templates');
     $cacheDir = getOption($argv, '--cache');
+    $tagsOption = getOption($argv, '--tags');
+    $useTags = $tagsOption !== null;
 
     if (!$templatesDir || !$cacheDir) {
         echo "Erreur: --templates et --cache requis\n";
-        echo "Usage: vision compile --templates=/path/to/templates --cache=/path/to/compiled\n";
+        echo "Usage: vision compile --templates=/path/to/templates --cache=/path/to/compiled [--tags=tag1,tag2]\n";
         exit(1);
     }
 
@@ -158,49 +165,149 @@ function compileTemplates(array $argv): void
 
     $parser = new TemplateParser();
     $compiler = new TemplateCompiler();
-    $cacheManager = new CacheManager($cacheDir, 86400);
-
-    // Trouver tous les templates .html.vis, .vis
-    $templates = [];
-    $patterns = ['*.html.vis', '*.vis', '*.php', '*.html'];
-
-    foreach ($patterns as $pattern) {
-        $found = glob($templatesDir . '/' . $pattern);
-        if ($found) {
-            $templates = array_merge($templates, $found);
-        }
-
-        // Récursif
-        $foundRecursive = glob($templatesDir . '/**/' . $pattern);
-        if ($foundRecursive) {
-            $templates = array_merge($templates, $foundRecursive);
-        }
+    
+    // Utiliser TaggedCacheManager si des tags sont fournis
+    if ($useTags) {
+        $cacheManager = new TaggedCacheManager($cacheDir, 86400);
+        $tags = $tagsOption ? explode(',', $tagsOption) : [];
+        $tags = array_map('trim', $tags);
+        echo "Mode tags activé: " . implode(', ', $tags) . "\n";
+    } else {
+        $cacheManager = new CacheManager($cacheDir, 86400);
     }
 
-    $templates = array_unique($templates);
+    // Trouver tous les templates récursivement
+    $templates = findTemplatesRecursive($templatesDir);
+
     $compiled = 0;
+    $errors = 0;
 
     echo "Compilation des templates...\n";
+    $startTime = microtime(true);
+    
     foreach ($templates as $templatePath) {
         $content = file_get_contents($templatePath);
         if ($content === false) {
+            $errors++;
             continue;
         }
 
         try {
             $parsed = $parser->parse($content);
             $compiledObj = $compiler->compile($parsed);
-            $cacheManager->saveCompiled($templatePath, $compiledObj);
+            
+            if ($useTags && !empty($tags)) {
+                $cacheManager->saveCompiled($templatePath, $compiledObj, $tags);
+            } else {
+                $cacheManager->saveCompiled($templatePath, $compiledObj);
+            }
+            
             $compiled++;
             $relativePath = str_replace($templatesDir . '/', '', $templatePath);
             echo "  ✓ $relativePath\n";
         } catch (Exception $e) {
+            $errors++;
             $relativePath = str_replace($templatesDir . '/', '', $templatePath);
             echo "  ✗ $relativePath: {$e->getMessage()}\n";
         }
     }
 
-    echo "\n✓ Compilation terminée: $compiled template(s) compilé(s)\n";
+    $duration = round(microtime(true) - $startTime, 2);
+    echo "\n✓ Compilation terminée: $compiled template(s) compilé(s)";
+    if ($errors > 0) {
+        echo ", $errors erreur(s)";
+    }
+    echo " (en {$duration}s)\n";
+}
+
+function warmupCache(array $argv): void
+{
+    $templatesDir = getOption($argv, '--templates');
+    $cacheDir = getOption($argv, '--cache');
+    $manifestPath = getOption($argv, '--manifest');
+
+    if (!$templatesDir || !$cacheDir) {
+        if (!$manifestPath) {
+            echo "Erreur: --templates et --cache requis, ou --manifest\n";
+            echo "Usage: vision warmup --templates=/path/to/templates --cache=/path/to/compiled\n";
+            echo "   ou: vision warmup --manifest=/path/to/manifest.json --cache=/path/to/compiled\n";
+            exit(1);
+        }
+    }
+
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0755, true);
+    }
+
+    $vision = new Vision($templatesDir ?? '');
+    $vision->setCache(true, $cacheDir, 86400);
+    
+    // Activer le pipeline compilé
+    $parser = new TemplateParser();
+    $compiler = new TemplateCompiler();
+    $cacheManager = new CacheManager($cacheDir, 86400);
+    $vision->setParser($parser);
+    $vision->setCompiler($compiler);
+    $vision->setCacheManager($cacheManager);
+
+    $warmupManager = new WarmupManager();
+
+    echo "Préchauffage du cache...\n";
+    $startTime = microtime(true);
+
+    if ($manifestPath) {
+        try {
+            $stats = $warmupManager->warmupFromManifest($manifestPath, $vision);
+        } catch (Exception $e) {
+            echo "Erreur: {$e->getMessage()}\n";
+            exit(1);
+        }
+    } else {
+        if (!is_dir($templatesDir)) {
+            echo "Erreur: Le répertoire templates $templatesDir n'existe pas\n";
+            exit(1);
+        }
+        $stats = $warmupManager->warmupDirectory($vision, $templatesDir, ['vis', 'html', 'php'], [], true);
+    }
+
+    $duration = round(microtime(true) - $startTime, 2);
+    echo "\n✓ Préchauffage terminé: {$stats['warmed']} template(s) réchauffé(s)";
+    if ($stats['errors'] > 0) {
+        echo ", {$stats['errors']} erreur(s)";
+    }
+    echo " (en {$duration}s)\n";
+}
+
+function findTemplatesRecursive(string $directory): array
+{
+    $templates = [];
+    $patterns = ['*.html.vis', '*.vis', '*.php', '*.html'];
+    
+    $iterator = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($directory, \RecursiveDirectoryIterator::SKIP_DOTS),
+        \RecursiveIteratorIterator::LEAVES_ONLY
+    );
+
+    foreach ($iterator as $file) {
+        if (!$file->isFile()) {
+            continue;
+        }
+
+        $extension = strtolower($file->getExtension());
+        $filename = $file->getFilename();
+        
+        // Vérifier les patterns
+        foreach ($patterns as $pattern) {
+            $patternExt = str_replace('*.', '', $pattern);
+            if ($extension === $patternExt || 
+                ($patternExt === 'html.vis' && str_ends_with($filename, '.html.vis'))) {
+                $templates[] = $file->getRealPath();
+                break;
+            }
+        }
+    }
+
+    return array_unique($templates);
 }
 
 function fragmentClear(array $argv): void
