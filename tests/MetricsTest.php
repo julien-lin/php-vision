@@ -152,6 +152,9 @@ class MetricsTest extends TestCase
             // Premier rendu (cache miss)
             $this->vision->render('test', ['name' => 'World']);
             
+            // Attendre un peu pour que le cache soit bien écrit
+            usleep(100000); // 100ms
+            
             // Deuxième rendu (cache hit)
             $this->vision->render('test', ['name' => 'World']);
             

@@ -20,6 +20,8 @@ class CacheManager
     private const LOCK_TIMEOUT = 5; // secondes
     private const LOCK_RETRY_INTERVAL = 50000; // microsecondes (50ms)
 
+    private ?FileStatsCache $fileStatsCache = null;
+
     public function __construct(
         private readonly string $cacheDir,
         private readonly int $ttl = 3600
@@ -30,6 +32,17 @@ class CacheManager
                 throw new VisionException("Impossible de créer le répertoire de cache: {$this->cacheDir}");
             }
         }
+    }
+
+    /**
+     * Obtient l'instance du cache de statistiques de fichiers
+     */
+    private function getFileStatsCache(): FileStatsCache
+    {
+        if ($this->fileStatsCache === null) {
+            $this->fileStatsCache = new FileStatsCache(5); // TTL de 5 secondes
+        }
+        return $this->fileStatsCache;
     }
 
     /**
@@ -115,7 +128,14 @@ class CacheManager
         $cacheKey = $this->generateCacheKey($templatePath, 'compiled');
         $cacheFile = $this->getCacheFilePath($cacheKey);
 
-        return $this->writeCache($cacheFile, $compiled);
+        $result = $this->writeCache($cacheFile, $compiled);
+        
+        // Invalider le cache de stats pour forcer la relecture au prochain appel
+        if ($result) {
+            $this->getFileStatsCache()->invalidate($cacheFile);
+        }
+        
+        return $result;
     }
 
     /**
@@ -153,19 +173,32 @@ class CacheManager
      */
     private function isCacheValid(string $cacheFile, string $templatePath): bool
     {
-        if (!file_exists($cacheFile)) {
+        $statsCache = $this->getFileStatsCache();
+
+        // Vérifier existence du fichier de cache
+        if (!$statsCache->exists($cacheFile)) {
             return false;
         }
 
         // Vérifier le TTL
-        $cacheTime = filemtime($cacheFile);
-        if ($cacheTime === false || (time() - $cacheTime) > $this->ttl) {
+        $cacheTime = $statsCache->mtime($cacheFile);
+        if ($cacheTime === null || (time() - $cacheTime) > $this->ttl) {
             return false;
         }
 
         // Vérifier que le template source n'a pas été modifié
-        $templateTime = filemtime($templatePath);
-        if ($templateTime === false || $templateTime > $cacheTime) {
+        // Invalider d'abord le cache de stats pour le template pour forcer la relecture
+        // (important si le template vient d'être modifié)
+        $statsCache->invalidate($templatePath);
+        $templateTime = $statsCache->mtime($templatePath);
+        // Si le template n'existe pas, invalider le cache
+        if ($templateTime === null) {
+            return false;
+        }
+        // Si le template a été modifié après la création du cache, invalider
+        // Note: On utilise > (strict) car si les timestamps sont égaux, cela signifie
+        // que le template et le cache ont été créés en même temps, ce qui est valide
+        if ($templateTime > $cacheTime) {
             return false;
         }
 
@@ -291,16 +324,20 @@ class CacheManager
             return 0;
         }
 
+        $statsCache = $this->getFileStatsCache();
+
         foreach ($files as $file) {
             if (is_file($file)) {
-                $fileTime = filemtime($file);
-                if ($fileTime === false) {
+                $fileTime = $statsCache->mtime($file);
+                if ($fileTime === null) {
                     continue;
                 }
 
                 if ($maxAge === 0 || ($now - $fileTime) > $maxAge) {
                     if (@unlink($file)) {
                         $deleted++;
+                        // Invalider le cache pour ce fichier
+                        $statsCache->invalidate($file);
                     }
                 }
             }
@@ -330,17 +367,19 @@ class CacheManager
             return ['count' => 0, 'size' => 0, 'oldest' => null, 'newest' => null];
         }
 
+        $statsCache = $this->getFileStatsCache();
+
         foreach ($files as $file) {
             if (is_file($file)) {
                 $count++;
-                $fileSize = filesize($file);
-                $fileTime = filemtime($file);
+                $fileSize = $statsCache->size($file);
+                $fileTime = $statsCache->mtime($file);
 
-                if ($fileSize !== false) {
+                if ($fileSize !== null) {
                     $size += $fileSize;
                 }
 
-                if ($fileTime !== false) {
+                if ($fileTime !== null) {
                     if ($oldest === null || $fileTime < $oldest) {
                         $oldest = $fileTime;
                     }

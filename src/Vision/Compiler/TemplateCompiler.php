@@ -36,7 +36,7 @@ class TemplateCompiler
     {
         // Optimiser l'AST en éliminant les branches mortes
         $optimizedAST = $this->branchEliminator->optimize($parsed->ast);
-        
+
         $phpCode = $this->compileAST($optimizedAST);
 
         return new CompiledTemplate(
