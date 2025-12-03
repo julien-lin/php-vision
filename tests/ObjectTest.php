@@ -6,6 +6,7 @@ namespace JulienLinard\Vision\Tests;
 
 use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Vision;
+use JulienLinard\Vision\Runtime\VariableResolver;
 
 class ObjectTest extends TestCase
 {
@@ -111,5 +112,71 @@ class ObjectTest extends TestCase
 
         // Le getter isActive() devrait être appelé pour 'active'
         $this->assertStringContainsString('Active', $result);
+    }
+
+    /**
+     * Test que le cache de reflection fonctionne correctement
+     * Ceci vérifie l'optimisation de performance qui évite les réflexions répétitives
+     */
+    public function testReflectionCache(): void
+    {
+        $resolver = new VariableResolver();
+        
+        // Objet avec getter
+        $object1 = new class {
+            public function getName(): string
+            {
+                return 'Test1';
+            }
+        };
+        
+        // Objet avec propriété publique
+        $object2 = new class {
+            public string $name = 'Test2';
+        };
+        
+        // Objet avec propriété privée (nécessite reflection)
+        $object3 = new class {
+            private string $name = 'Test3';
+            
+            public function getName(): string
+            {
+                return $this->name;
+            }
+        };
+        
+        // Premier accès - doit résoudre et mettre en cache
+        $result1 = $resolver->resolve(['obj' => $object1], 'obj.name');
+        $this->assertEquals('Test1', $result1);
+        
+        // Deuxième accès - doit utiliser le cache
+        $result2 = $resolver->resolve(['obj' => $object1], 'obj.name');
+        $this->assertEquals('Test1', $result2);
+        
+        // Test avec propriété publique
+        $result3 = $resolver->resolve(['obj' => $object2], 'obj.name');
+        $this->assertEquals('Test2', $result3);
+        
+        // Test avec getter isXxx
+        $object4 = new class {
+            public function isActive(): bool
+            {
+                return true;
+            }
+        };
+        
+        $result4 = $resolver->resolve(['obj' => $object4], 'obj.active');
+        $this->assertTrue($result4);
+        
+        // Deuxième accès - doit utiliser le cache
+        $result5 = $resolver->resolve(['obj' => $object4], 'obj.active');
+        $this->assertTrue($result5);
+        
+        // Test nettoyage du cache
+        $resolver->clearReflectionCache();
+        
+        // Après nettoyage, le cache devrait être vide mais la résolution devrait toujours fonctionner
+        $result6 = $resolver->resolve(['obj' => $object1], 'obj.name');
+        $this->assertEquals('Test1', $result6);
     }
 }
