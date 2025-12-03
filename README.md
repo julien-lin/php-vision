@@ -78,6 +78,21 @@ $vision = new Vision('/path/to/templates');
 
 // Enable rendering cache
 $vision->setCache(true, '/path/to/cache', 3600);
+## 🧩 Macros
+
+Vision supporte les macros pour créer des composants de template réutilisables.
+
+Exemple rapide:
+
+```
+{% macro button(label, type="button") %}
+<button type="{{ type }}">{{ label }}</button>
+{% endmacro %}
+
+{{ button('Click me', 'submit') }}
+```
+
+Voir `MACROS.md` pour la documentation complète (définitions, import, appels, filtres, limitations).
 
 // Enable compilation pipeline (recommended for production)
 $vision->setParser(new TemplateParser());
