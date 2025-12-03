@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use JulienLinard\Vision\Vision;
 use JulienLinard\Vision\Cache\WarmupManager;
 use JulienLinard\Vision\Cache\TaggedCacheManager;
+use JulienLinard\Vision\Cache\FileStatsCache;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Exception\VisionException;
@@ -494,6 +495,103 @@ class CacheTest extends TestCase
             $cleaned = $taggedCache->cleanTagIndex();
             // Le fichier existe encore, donc cleaned devrait être 0 ou plus
             $this->assertGreaterThanOrEqual(0, $cleaned);
+        } finally {
+            @unlink($templateFile);
+            // Nettoyer le cache
+            if (is_dir($cacheDir)) {
+                $files = glob($cacheDir . '/*');
+                if ($files !== false) {
+                    foreach ($files as $file) {
+                        if (is_file($file)) {
+                            @unlink($file);
+                        }
+                    }
+                }
+                @rmdir($cacheDir);
+            }
+        }
+    }
+
+    public function testFileStatsCache(): void
+    {
+        $cache = new FileStatsCache(5); // TTL de 5 secondes
+        
+        // Créer un fichier temporaire
+        $testFile = sys_get_temp_dir() . '/test_file_stats_' . uniqid() . '.txt';
+        file_put_contents($testFile, 'Test content');
+        
+        try {
+            // Premier appel : doit récupérer depuis le système
+            $stats1 = $cache->getStats($testFile);
+            $this->assertNotNull($stats1);
+            $this->assertTrue($stats1['exists']);
+            $this->assertNotNull($stats1['mtime']);
+            $this->assertNotNull($stats1['size']);
+            $this->assertEquals(12, $stats1['size']); // "Test content" = 12 caractères
+            
+            // Deuxième appel : doit utiliser le cache
+            $stats2 = $cache->getStats($testFile);
+            $this->assertEquals($stats1['mtime'], $stats2['mtime']);
+            $this->assertEquals($stats1['size'], $stats2['size']);
+            
+            // Test méthodes helper
+            $this->assertTrue($cache->exists($testFile));
+            $this->assertNotNull($cache->mtime($testFile));
+            $this->assertEquals(12, $cache->size($testFile));
+            
+            // Test fichier inexistant
+            $nonExistent = sys_get_temp_dir() . '/non_existent_' . uniqid() . '.txt';
+            $this->assertFalse($cache->exists($nonExistent));
+            $this->assertNull($cache->mtime($nonExistent));
+            $this->assertNull($cache->size($nonExistent));
+            
+            // Test invalidation
+            $cache->invalidate($testFile);
+            // Après invalidation, le prochain appel devrait recharger depuis le système
+            $stats3 = $cache->getStats($testFile);
+            $this->assertNotNull($stats3);
+            $this->assertTrue($stats3['exists']);
+            
+            // Test clear
+            $cache->clear();
+            $cacheStats = $cache->getCacheStats();
+            $this->assertEquals(0, $cacheStats['size']);
+            $this->assertEquals(5, $cacheStats['ttl']);
+        } finally {
+            @unlink($testFile);
+        }
+    }
+
+    public function testFileStatsCacheWithCacheManager(): void
+    {
+        // Test que CacheManager utilise bien FileStatsCache
+        $cacheDir = sys_get_temp_dir() . '/vision_file_stats_test_' . uniqid();
+        $cacheManager = new \JulienLinard\Vision\Cache\CacheManager($cacheDir, 3600);
+        
+        // Créer un template temporaire
+        $templateFile = sys_get_temp_dir() . '/test_template_' . uniqid() . '.vis';
+        file_put_contents($templateFile, 'Hello {{ name }}!');
+        
+        try {
+            $parser = new TemplateParser();
+            $compiler = new TemplateCompiler();
+            
+            // Parser et compiler
+            $parsed = $parser->parse(file_get_contents($templateFile));
+            $compiled = $compiler->compile($parsed);
+            
+            // Sauvegarder dans le cache
+            $cacheManager->saveCompiled($templateFile, $compiled);
+            
+            // Récupérer depuis le cache (devrait utiliser FileStatsCache)
+            $cached = $cacheManager->getCompiled($templateFile);
+            $this->assertNotNull($cached);
+            $this->assertEquals($compiled->phpCode, $cached->phpCode);
+            
+            // Vérifier que le cache fonctionne (deuxième appel devrait utiliser le cache)
+            $cached2 = $cacheManager->getCompiled($templateFile);
+            $this->assertNotNull($cached2);
+            $this->assertEquals($compiled->phpCode, $cached2->phpCode);
         } finally {
             @unlink($templateFile);
             // Nettoyer le cache

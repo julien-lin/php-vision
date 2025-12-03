@@ -60,15 +60,17 @@ class DeadBranchEliminator
                 $ifGroup = [$child];
                 $j = $i + 1;
                 while ($j < count($children)) {
-                    if ($children[$j]->type === NodeType::ELSEIF_CONDITION || 
-                        $children[$j]->type === NodeType::ELSE_CONDITION) {
+                    if (
+                        $children[$j]->type === NodeType::ELSEIF_CONDITION ||
+                        $children[$j]->type === NodeType::ELSE_CONDITION
+                    ) {
                         $ifGroup[] = $children[$j];
                         $j++;
                     } else {
                         break;
                     }
                 }
-                
+
                 // Optimiser le groupe
                 $result = $this->optimizeIfGroup($ifGroup);
                 if ($result === null) {
@@ -76,7 +78,7 @@ class DeadBranchEliminator
                     $i = $j;
                     continue;
                 }
-                
+
                 if (is_array($result)) {
                     // Plusieurs nœuds retournés
                     $optimized = array_merge($optimized, $result);
@@ -84,7 +86,7 @@ class DeadBranchEliminator
                     // Un seul nœud
                     $optimized[] = $result;
                 }
-                
+
                 $i = $j;
             } else {
                 // Cloner et optimiser récursivement
@@ -110,12 +112,12 @@ class DeadBranchEliminator
     private function optimizeIfGroup(array $group): ASTNode|array|null
     {
         $ifNode = $group[0];
-        
+
         if (!isset($ifNode->metadata[1])) {
             // Pas de condition extractible, conserver le groupe
             $cloned = clone $ifNode;
             $cloned->children = $this->optimizeChildren($ifNode->children);
-            
+
             // Conserver les elseif/else tels quels
             $result = [$cloned];
             for ($i = 1; $i < count($group); $i++) {
@@ -123,12 +125,12 @@ class DeadBranchEliminator
                 $cloned->children = $this->optimizeChildren($group[$i]->children);
                 $result[] = $cloned;
             }
-            
+
             return count($result) === 1 ? $result[0] : $result;
         }
 
         $condition = trim($ifNode->metadata[1][0]);
-        
+
         // Cas spécial: true/false littéraux (déjà constants)
         if ($condition === 'true' || $condition === 'false') {
             $isTrue = ($condition === 'true');
@@ -138,24 +140,24 @@ class DeadBranchEliminator
                 // {% if false %} → chercher elseif/else
                 for ($i = 1; $i < count($group); $i++) {
                     $node = $group[$i];
-                    
+
                     if ($node->type === NodeType::ELSEIF_CONDITION) {
                         if (!isset($node->metadata[1])) {
                             $cloned = clone $node;
                             $cloned->children = $this->optimizeChildren($node->children);
-                            
+
                             $result = [$cloned];
                             for ($j = $i + 1; $j < count($group); $j++) {
                                 $cloned = clone $group[$j];
                                 $cloned->children = $this->optimizeChildren($group[$j]->children);
                                 $result[] = $cloned;
                             }
-                            
+
                             return count($result) === 1 ? $result[0] : $result;
                         }
-                        
+
                         $elseifCond = trim($node->metadata[1][0]);
-                        
+
                         // Cas spécial elseif true/false
                         if ($elseifCond === 'true') {
                             return $this->optimizeChildren($node->children);
@@ -163,10 +165,10 @@ class DeadBranchEliminator
                             // Continuer vers le prochain elseif/else
                             continue;
                         }
-                        
+
                         // Sinon, tenter fold
                         $elseifFolded = $this->constantFolder->fold($elseifCond);
-                        
+
                         if ($elseifFolded !== $elseifCond) {
                             $elseifTrue = ($elseifFolded === 'true' || $elseifFolded === '1');
                             if ($elseifTrue) {
@@ -176,40 +178,40 @@ class DeadBranchEliminator
                             // Non constante, conserver
                             $cloned = clone $node;
                             $cloned->children = $this->optimizeChildren($node->children);
-                            
+
                             $result = [$cloned];
                             for ($j = $i + 1; $j < count($group); $j++) {
                                 $cloned = clone $group[$j];
                                 $cloned->children = $this->optimizeChildren($group[$j]->children);
                                 $result[] = $cloned;
                             }
-                            
+
                             return count($result) === 1 ? $result[0] : $result;
                         }
                     } elseif ($node->type === NodeType::ELSE_CONDITION) {
                         return $this->optimizeChildren($node->children);
                     }
                 }
-                
+
                 // Aucun elseif/else, dead code
                 return null;
             }
         }
-        
+
         $folded = $this->constantFolder->fold($condition);
 
         // Si non constante, conserver le groupe
         if ($folded === $condition) {
             $cloned = clone $ifNode;
             $cloned->children = $this->optimizeChildren($ifNode->children);
-            
+
             $result = [$cloned];
             for ($i = 1; $i < count($group); $i++) {
                 $cloned = clone $group[$i];
                 $cloned->children = $this->optimizeChildren($group[$i]->children);
                 $result[] = $cloned;
             }
-            
+
             return count($result) === 1 ? $result[0] : $result;
         }
 
@@ -223,27 +225,27 @@ class DeadBranchEliminator
             // {% if false %} → chercher elseif/else
             for ($i = 1; $i < count($group); $i++) {
                 $node = $group[$i];
-                
+
                 if ($node->type === NodeType::ELSEIF_CONDITION) {
                     // Optimiser l'elseif comme un if
                     if (!isset($node->metadata[1])) {
                         // Pas de condition, conserver
                         $cloned = clone $node;
                         $cloned->children = $this->optimizeChildren($node->children);
-                        
+
                         $result = [$cloned];
                         for ($j = $i + 1; $j < count($group); $j++) {
                             $cloned = clone $group[$j];
                             $cloned->children = $this->optimizeChildren($group[$j]->children);
                             $result[] = $cloned;
                         }
-                        
+
                         return count($result) === 1 ? $result[0] : $result;
                     }
-                    
+
                     $elseifCond = trim($node->metadata[1][0]);
                     $elseifFolded = $this->constantFolder->fold($elseifCond);
-                    
+
                     if ($elseifFolded !== $elseifCond) {
                         // Constante
                         $elseifTrue = ($elseifFolded === 'true' || $elseifFolded === '1');
@@ -255,14 +257,14 @@ class DeadBranchEliminator
                         // Non constante, conserver elseif et le reste
                         $cloned = clone $node;
                         $cloned->children = $this->optimizeChildren($node->children);
-                        
+
                         $result = [$cloned];
                         for ($j = $i + 1; $j < count($group); $j++) {
                             $cloned = clone $group[$j];
                             $cloned->children = $this->optimizeChildren($group[$j]->children);
                             $result[] = $cloned;
                         }
-                        
+
                         return count($result) === 1 ? $result[0] : $result;
                     }
                 } elseif ($node->type === NodeType::ELSE_CONDITION) {
@@ -270,7 +272,7 @@ class DeadBranchEliminator
                     return $this->optimizeChildren($node->children);
                 }
             }
-            
+
             // Aucun elseif/else, dead code
             return null;
         }
@@ -404,7 +406,7 @@ class DeadBranchEliminator
         $stats = ['eliminable' => 0, 'total' => 0];
         $this->collectIfStats($node, $stats);
 
-        $percentage = $stats['total'] > 0 
+        $percentage = $stats['total'] > 0
             ? round(($stats['eliminable'] / $stats['total']) * 100, 2)
             : 0.0;
 
@@ -428,7 +430,7 @@ class DeadBranchEliminator
 
             if (isset($node->metadata[1])) {
                 $condition = trim($node->metadata[1][0]);
-                
+
                 // true/false littéraux sont toujours éliminables
                 if ($condition === 'true' || $condition === 'false') {
                     $stats['eliminable']++;

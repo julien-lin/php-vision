@@ -225,7 +225,7 @@ class DeadBranchEliminatorTest extends TestCase
         // Boucle conservée, if true interne éliminé
         $this->assertCount(1, $optimized->children);
         $this->assertEquals(NodeType::FOR_LOOP, $optimized->children[0]->type);
-        
+
         $forNode = $optimized->children[0];
         // Le contenu de la boucle devrait être la variable (if true éliminé)
         $this->assertCount(1, $forNode->children);
@@ -238,9 +238,9 @@ class DeadBranchEliminatorTest extends TestCase
     {
         $content = '{% if user %}Content{% endif %}';
         $parsed = $this->parser->parse($content);
-        
+
         $stats = $this->eliminator->analyzeOptimizationPotential($parsed->ast);
-        
+
         $this->assertEquals(0, $stats['eliminable']);
         $this->assertEquals(1, $stats['total']);
         $this->assertEquals(0.0, $stats['percentage']);
@@ -250,9 +250,9 @@ class DeadBranchEliminatorTest extends TestCase
     {
         $content = '{% if true %}A{% endif %}{% if false %}B{% endif %}';
         $parsed = $this->parser->parse($content);
-        
+
         $stats = $this->eliminator->analyzeOptimizationPotential($parsed->ast);
-        
+
         $this->assertEquals(2, $stats['eliminable']);
         $this->assertEquals(2, $stats['total']);
         $this->assertEquals(100.0, $stats['percentage']);
@@ -262,9 +262,9 @@ class DeadBranchEliminatorTest extends TestCase
     {
         $content = '{% if true %}A{% endif %}{% if user %}B{% endif %}{% if false %}C{% endif %}';
         $parsed = $this->parser->parse($content);
-        
+
         $stats = $this->eliminator->analyzeOptimizationPotential($parsed->ast);
-        
+
         $this->assertEquals(2, $stats['eliminable']);
         $this->assertEquals(3, $stats['total']);
         $this->assertEquals(66.67, $stats['percentage']);
@@ -274,9 +274,9 @@ class DeadBranchEliminatorTest extends TestCase
     {
         $content = 'No conditions';
         $parsed = $this->parser->parse($content);
-        
+
         $stats = $this->eliminator->analyzeOptimizationPotential($parsed->ast);
-        
+
         $this->assertEquals(0, $stats['eliminable']);
         $this->assertEquals(0, $stats['total']);
         $this->assertEquals(0.0, $stats['percentage']);
@@ -314,7 +314,7 @@ TPL;
                 $hasIfCondition = true;
             }
         }
-        
+
         $this->assertTrue($hasIfCondition, 'Condition with variable should be kept');
     }
 

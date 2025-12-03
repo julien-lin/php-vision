@@ -22,6 +22,7 @@ use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Cache\CacheManager;
 use JulienLinard\Vision\Cache\FragmentCache;
+use JulienLinard\Vision\Cache\FileStatsCache;
 use JulienLinard\Vision\Runtime\VariableResolver;
 use JulienLinard\Vision\Runtime\ControlStructureProcessor;
 use JulienLinard\Vision\Runtime\SafeString;
@@ -132,6 +133,11 @@ class Vision
     private ?CacheManager $cacheManager = null;
     private ?FragmentCache $fragmentCache = null;
     private VariableResolver $resolver;
+    
+    /**
+     * Cache des statistiques de fichiers pour réduire les appels système
+     */
+    private ?FileStatsCache $fileStatsCache = null;
     
     /**
      * Singleton ControlStructureProcessor pour éviter les allocations répétées
@@ -1107,6 +1113,17 @@ class Vision
     }
 
     /**
+     * Obtient l'instance du cache de statistiques de fichiers
+     */
+    private function getFileStatsCache(): FileStatsCache
+    {
+        if ($this->fileStatsCache === null) {
+            $this->fileStatsCache = new FileStatsCache(5); // TTL de 5 secondes
+        }
+        return $this->fileStatsCache;
+    }
+
+    /**
      * Récupère le contenu depuis le cache si valide
      *
      * @param string $templatePath Chemin complet vers le template
@@ -1116,24 +1133,27 @@ class Vision
     private function getCachedContent(string $templatePath, array $variables): ?string
     {
         $cacheFile = $this->getCacheFilePath($templatePath, $variables);
+        $statsCache = $this->getFileStatsCache();
 
-        if (!file_exists($cacheFile)) {
+        if (!$statsCache->exists($cacheFile)) {
             return null;
         }
 
-        $cacheMTime = filemtime($cacheFile);
+        $cacheMTime = $statsCache->mtime($cacheFile);
         $now = time();
 
         // Vérifier le TTL
-        if (($now - $cacheMTime) >= $this->cacheTTL) {
+        if ($cacheMTime === null || ($now - $cacheMTime) >= $this->cacheTTL) {
             @unlink($cacheFile);
+            $statsCache->invalidate($cacheFile);
             return null;
         }
 
         // Vérifier si le template source a changé
-        $templateMTime = file_exists($templatePath) ? filemtime($templatePath) : 0;
+        $templateMTime = $statsCache->mtime($templatePath) ?? 0;
         if ($templateMTime > $cacheMTime) {
             @unlink($cacheFile);
+            $statsCache->invalidate($cacheFile);
             return null;
         }
 
@@ -1226,7 +1246,8 @@ class Vision
         $this->validateCacheVariables($variables);
 
         // Inclure le timestamp du template dans le hash pour invalidation automatique
-        $templateMTime = file_exists($templatePath) ? filemtime($templatePath) : 0;
+        $statsCache = $this->getFileStatsCache();
+        $templateMTime = $statsCache->mtime($templatePath) ?? 0;
 
         // Créer un hash basé sur le template et les variables
         // Les variables sont sérialisées pour créer un hash unique
