@@ -26,6 +26,9 @@ use JulienLinard\Vision\Runtime\VariableResolver;
 use JulienLinard\Vision\Runtime\ControlStructureProcessor;
 use JulienLinard\Vision\Runtime\SafeString;
 use JulienLinard\Vision\Runtime\Sandbox;
+use JulienLinard\Vision\Runtime\MetricsCollector;
+use JulienLinard\Vision\Runtime\VisionLoggerInterface;
+use JulienLinard\Vision\Runtime\VisionLogger;
 
 /**
  * Moteur de template Vision
@@ -151,6 +154,16 @@ class Vision
      * Mode sandbox pour templates non-fiables
      */
     private ?Sandbox $sandbox = null;
+
+    /**
+     * Collecteur de métriques de performance
+     */
+    private ?MetricsCollector $metricsCollector = null;
+
+    /**
+     * Logger pour les événements
+     */
+    private ?VisionLoggerInterface $logger = null;
 
     /**
      * Constructeur
@@ -306,6 +319,50 @@ class Vision
     }
 
     /**
+     * Configure le collecteur de métriques
+     * 
+     * @param MetricsCollector $collector Instance du collecteur
+     * @return self
+     */
+    public function setMetricsCollector(MetricsCollector $collector): self
+    {
+        $this->metricsCollector = $collector;
+        return $this;
+    }
+
+    /**
+     * Obtient le collecteur de métriques si configuré
+     * 
+     * @return MetricsCollector|null
+     */
+    public function getMetricsCollector(): ?MetricsCollector
+    {
+        return $this->metricsCollector;
+    }
+
+    /**
+     * Configure le logger
+     * 
+     * @param VisionLoggerInterface $logger Instance du logger
+     * @return self
+     */
+    public function setLogger(VisionLoggerInterface $logger): self
+    {
+        $this->logger = $logger;
+        return $this;
+    }
+
+    /**
+     * Obtient le logger si configuré
+     * 
+     * @return VisionLoggerInterface|null
+     */
+    public function getLogger(): ?VisionLoggerInterface
+    {
+        return $this->logger;
+    }
+
+    /**
      * Enregistre un filtre personnalisé
      *
      * @param FilterInterface $filter
@@ -440,9 +497,13 @@ class Vision
      */
     public function render(string $template, array $variables = []): string
     {
+        $startTime = microtime(true);
+        $cacheHit = false;
+
         $templatePath = $this->getTemplatePath($template);
 
         if (!file_exists($templatePath)) {
+            $this->logger?->error('Template not found', ['template' => $template, 'path' => $templatePath]);
             throw new TemplateNotFoundException($template);
         }
 
@@ -453,14 +514,27 @@ class Vision
 
             if ($compiled === null) {
                 // Lire et parser
+                $parseStart = microtime(true);
                 $content = file_get_contents($templatePath);
                 if ($content === false) {
                     throw new VisionException("Impossible de lire le template : {$template}");
                 }
                 $parsed = $this->parser->parse($content);
+                $parseTime = microtime(true) - $parseStart;
+                $this->metricsCollector?->recordParse($parseTime);
+                
+                // Compiler
+                $compileStart = microtime(true);
                 $compiled = $this->compiler->compile($parsed);
+                $compileTime = microtime(true) - $compileStart;
+                $this->metricsCollector?->recordCompilation($compileTime);
+                
                 // Sauvegarder en cache
                 $this->cacheManager->saveCompiled($templatePath, $compiled);
+                $this->logger?->debug('Template compiled and cached', ['template' => $template]);
+            } else {
+                $cacheHit = true;
+                $this->logger?->debug('Template loaded from cache', ['template' => $template]);
             }
 
             // Exécuter avec helpers connectés à cette instance
@@ -476,13 +550,22 @@ class Vision
                 },
             ];
 
-            return $compiled->execute($variables, $helpers);
+            $result = $compiled->execute($variables, $helpers);
+            
+            // Enregistrer les métriques
+            $renderTime = microtime(true) - $startTime;
+            $this->metricsCollector?->recordRender($renderTime, $cacheHit);
+            
+            return $result;
         }
 
         // Fallback: pipeline historique (cache de rendu par fichier)
         if ($this->cacheEnabled && $this->cacheDir !== null) {
             $cached = $this->getCachedContent($templatePath, $variables);
             if ($cached !== null) {
+                $cacheHit = true;
+                $renderTime = microtime(true) - $startTime;
+                $this->metricsCollector?->recordRender($renderTime, $cacheHit);
                 return $cached;
             }
         }
@@ -499,6 +582,10 @@ class Vision
             $this->saveCachedContent($templatePath, $variables, $rendered);
         }
 
+        // Enregistrer les métriques
+        $renderTime = microtime(true) - $startTime;
+        $this->metricsCollector?->recordRender($renderTime, $cacheHit);
+
         return $rendered;
     }
 
@@ -513,6 +600,8 @@ class Vision
      */
     public function renderString(string $content, array $variables = [], int $depth = 0): string
     {
+        $startTime = $depth === 0 ? microtime(true) : null;
+
         // Valider avec sandbox si activé (seulement au premier niveau)
         if ($depth === 0 && $this->sandbox !== null) {
             $this->sandbox->validateTemplate($content);
@@ -535,6 +624,12 @@ class Vision
 
         // Traiter les variables et filtres
         $content = $this->processVariables($content, $variables);
+
+        // Enregistrer les métriques seulement au premier niveau (depth === 0)
+        if ($startTime !== null) {
+            $renderTime = microtime(true) - $startTime;
+            $this->metricsCollector?->recordRender($renderTime, false);
+        }
 
         return $content;
     }
