@@ -20,8 +20,8 @@ class TemplateParser
     private const PATTERN_ELSEIF = '/\{%\s*elseif\s+([^%]{1,200})\s*%\}/';
     private const PATTERN_ELSE = '/\{%\s*else\s*%\}/';
     private const PATTERN_ENDIF = '/\{%\s*endif\s*%\}/';
-    // Autoriser plus de caractères (dont '@', '/', '?', '#', '&', '=') dans les expressions, notamment à l'intérieur des quotes
-    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z_][^|}]{0,300})\s*(?:\|\s*([a-zA-Z_][^}]{0,200}))?\s*\}\}/s';
+    // Autoriser plus de caractères (dont '@', '/', '?', '#', '&', '=', opérateurs) dans les expressions, notamment à l'intérieur des quotes
+    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_][^|}]{0,300})\s*(?:\|\s*([a-zA-Z_][^}]{0,200}))?\s*\}\}/s';
 
     // Template Inheritance patterns
     private const PATTERN_EXTENDS = '/\{%\s*extends\s+["\']([^"\']+)["\']\s*%\}/';
