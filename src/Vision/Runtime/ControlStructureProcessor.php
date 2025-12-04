@@ -28,18 +28,24 @@ class ControlStructureProcessor
 
     private function processForLoops(string $content, array $variables, int $depth, callable $render, callable $resolve): string
     {
-        if (!preg_match('/{%\s*for\s+(\w+)\s+in\s+(\w+(?:\.\w+)*)\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
+        if (!preg_match('/{%\s*for\s+(\w+(?:\s*,\s*\w+)*)\s+in\s+(\w+(?:\.\w+)*)\s*(?:if\s+(.+?))?\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
             return $content;
         }
 
         $startPos = $matches[0][1];
         $startLen = strlen($matches[0][0]);
-        $itemVar = $matches[1][0];
+        $itemVarStr = $matches[1][0];
         $arrayVar = $matches[2][0];
+        $condition = isset($matches[3][0]) ? trim($matches[3][0]) : null;
+
+        // Parse multiple loop variables (for key, value in items)
+        $itemVars = array_map('trim', explode(',', $itemVarStr));
 
         $pos = $startPos + $startLen;
         $level = 1;
         $loopContentParts = [];
+        $elseContentParts = [];
+        $inElse = false;
 
         while ($pos < strlen($content) && $level > 0) {
             $nextFor = strpos($content, '{%', $pos);
@@ -54,20 +60,41 @@ class ControlStructureProcessor
 
             if (preg_match(self::REGEX_FOR_TAG, $tag)) {
                 $level++;
-                $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                if ($inElse) {
+                    $elseContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                } else {
+                    $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                }
                 $pos = $endTag + 2;
             } elseif (preg_match(self::REGEX_ENDFOR_TAG, $tag)) {
                 $level--;
                 if ($level === 0) {
-                    $loopContentParts[] = substr($content, $pos, $nextFor - $pos);
+                    if ($inElse) {
+                        $elseContentParts[] = substr($content, $pos, $nextFor - $pos);
+                    } else {
+                        $loopContentParts[] = substr($content, $pos, $nextFor - $pos);
+                    }
                     $pos = $endTag + 2;
                     break;
                 } else {
-                    $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                    if ($inElse) {
+                        $elseContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                    } else {
+                        $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                    }
                     $pos = $endTag + 2;
                 }
+            } elseif (preg_match(self::REGEX_ELSE_TAG, $tag) && $level === 1 && !$inElse) {
+                // else for the for loop (not nested if)
+                $loopContentParts[] = substr($content, $pos, $nextFor - $pos);
+                $inElse = true;
+                $pos = $endTag + 2;
             } else {
-                $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                if ($inElse) {
+                    $elseContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                } else {
+                    $loopContentParts[] = substr($content, $pos, $nextFor - $pos + strlen($tag));
+                }
                 $pos = $endTag + 2;
             }
         }
@@ -77,9 +104,11 @@ class ControlStructureProcessor
         }
 
         $loopContent = implode('', $loopContentParts);
+        $elseContent = implode('', $elseContentParts);
 
         $arrayValue = $resolve($variables, $arrayVar);
         $result = '';
+        $hasItems = false;
 
         if (is_array($arrayValue) || $arrayValue instanceof \Traversable) {
             if ($arrayValue instanceof \Traversable && !is_array($arrayValue)) {
@@ -89,9 +118,22 @@ class ControlStructureProcessor
             $arrayCount = count($arrayValue);
             $index = 0;
 
-            foreach ($arrayValue as $item) {
+            foreach ($arrayValue as $key => $item) {
+                // Handle for...if conditions
+                if ($condition !== null) {
+                    // Evaluate condition for this item
+                    $loopVars = array_merge($variables, [$itemVars[0] => $item]);
+                    if (count($itemVars) > 1) {
+                        $loopVars[$itemVars[1]] = $key;
+                    }
+                    // Evaluate the condition with loopVars context
+                    if (!$this->evaluateConditionSimple($condition, $loopVars)) {
+                        continue;
+                    }
+                }
+
+                $hasItems = true;
                 $loopVariables = array_merge($variables, [
-                    $itemVar => $item,
                     'loop' => [
                         'index' => $index + 1,
                         'index0' => $index,
@@ -100,12 +142,55 @@ class ControlStructureProcessor
                         'length' => $arrayCount,
                     ],
                 ]);
+
+                // Handle single var (item) or two vars (key, value)
+                if (count($itemVars) > 1) {
+                    // Two vars: key, value
+                    $loopVariables[$itemVars[0]] = $key;
+                    $loopVariables[$itemVars[1]] = $item;
+                } else {
+                    // Single var: item
+                    $loopVariables[$itemVars[0]] = $item;
+                }
+
                 $result .= $render($loopContent, $loopVariables, $depth + 1);
                 $index++;
             }
         }
 
+        // If no items and has else block, render else content
+        if (!$hasItems && !empty($elseContent)) {
+            $result = $render($elseContent, $variables, $depth + 1);
+        }
+
         return substr($content, 0, $startPos) . $result . substr($content, $pos);
+    }
+
+    private function evaluateConditionSimple(string $condition, array $variables): bool
+    {
+        // Simple condition evaluation (for basic for...if support)
+        // This is a simplified version that handles basic comparisons
+        if (preg_match('/(\w+)\s*(>|<|>=|<=|==|!=)\s*(\d+)/', $condition, $m)) {
+            $var = $m[1];
+            $op = $m[2];
+            $val = (int)$m[3];
+            $varVal = $variables[$var] ?? null;
+            
+            if ($varVal === null) {
+                return false;
+            }
+            
+            return match ($op) {
+                '>' => $varVal > $val,
+                '<' => $varVal < $val,
+                '>=' => $varVal >= $val,
+                '<=' => $varVal <= $val,
+                '==' => $varVal == $val,
+                '!=' => $varVal != $val,
+                default => false,
+            };
+        }
+        return true;
     }
 
     private function processIfConditions(string $content, array $variables, int $depth, callable $render, callable $evaluateCondition): string

@@ -9,7 +9,7 @@ class VariableResolver
      * Limité à 500 entrées pour éviter les fuites mémoire
      */
     private array $reflectionCache = [];
-    
+
     private const MAX_REFLECTION_CACHE_SIZE = 500;
 
     public function resolve(array $variables, string $path): mixed
@@ -23,7 +23,7 @@ class VariableResolver
             } elseif (is_object($value)) {
                 $className = get_class($value);
                 $cacheKey = $className . '::' . $part;
-                
+
                 // Cache hit pour reflection
                 if (isset($this->reflectionCache[$cacheKey])) {
                     $cached = $this->reflectionCache[$cacheKey];
@@ -39,7 +39,7 @@ class VariableResolver
                     }
                     continue;
                 }
-                
+
                 // Nouvelle résolution
                 $getter = 'get' . ucfirst($part);
                 if (method_exists($value, $getter)) {
