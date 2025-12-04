@@ -47,7 +47,7 @@ class Vision
      * Patterns regex précompilés pour améliorer les performances
      * Optimisés pour éviter ReDoS (limiter backtracking)
      */
-    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/]+?)\s*\}\}/';
+    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/+*%?&|!=<>]+?)\s*\}\}/';
     private const PATTERN_CONDITION_OPERATOR = '/^(\w+(?:\.\w+){0,10})\s*(==|!=|>=|<=|>|<)\s*([\w\s"\'.-]{0,200})$/';
     private const PATTERN_CONDITION_VARIABLE = '/^(\w+(?:\.\w+){0,10})$/';
     private const PATTERN_CONDITION_NEGATION = '/^!\s*(\w+(?:\.\w+){0,10})$/';
@@ -701,6 +701,10 @@ class Vision
                 'evaluateCondition' => function (string $condition, array $vars) {
                     return $this->evaluateCondition($condition, $vars);
                 },
+                'evaluateExpression' => function (string $expr, array $vars) {
+                    $evaluator = new \JulienLinard\Vision\Runtime\ExpressionEvaluator($this->resolver);
+                    return $evaluator->evaluate($expr, $vars);
+                },
             ];
 
             $result = $compiled->execute($variables, $helpers);
@@ -901,7 +905,7 @@ class Vision
     }
 
     /**
-     * Évalue une expression (variable avec filtres)
+     * Évalue une expression (variable avec filtres ou expression avec opérateurs)
      *
      * @param string $expression
      * @param array<string, mixed> $variables
@@ -932,6 +936,13 @@ class Vision
 
             // Si la fonction n'existe pas, retourner une chaîne vide plutôt que l'expression
             return '';
+        }
+
+        // Détecter si c'est une expression avec opérateurs (math, ternaire, comparaisons)
+        if ($this->hasExpressionOperators($expression)) {
+            $evaluator = new Runtime\ExpressionEvaluator($this->resolver);
+            $result = $evaluator->evaluate($expression, $variables);
+            return $this->formatValue($result);
         }
 
         // Parser les filtres (variable|filter1|filter2:param)
@@ -970,6 +981,39 @@ class Vision
         }
 
         return $this->formatValue($value);
+    }
+
+    /**
+     * Détecte si une expression contient des opérateurs (pas des séparateurs de filtres)
+     */
+    private function hasExpressionOperators(string $expr): bool
+    {
+        // Opérateurs booléens: &&, || AVANT de vérifier les filtres (qui utilisent |)
+        if (preg_match('/(\|\||&&)/', $expr) !== 0) {
+            return true;
+        }
+
+        // Si c'est un filtre (contient |), ce n'est PAS une expression avec opérateur
+        if (strpos($expr, '|') !== false) {
+            return false;
+        }
+
+        // Opérateurs math: +, -, *, /, %, **
+        if (preg_match('/[\+\-\*\/%]|(\*\*)/', $expr) !== 0) {
+            return true;
+        }
+
+        // Comparaisons: >, <, >=, <=, ==, !=, ===, !==
+        if (preg_match('/(===|!==|==|!=|<=|>=|[<>])/', $expr) !== 0) {
+            return true;
+        }
+
+        // Ternaire: ? et :
+        if (strpos($expr, '?') !== false && strpos($expr, ':') !== false) {
+            return true;
+        }
+
+        return false;
     }
 
     /**

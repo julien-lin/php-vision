@@ -199,16 +199,22 @@ class TemplateCompiler
                 return $this->compileMacroCall($matches[1], $matches[2], $indent);
             }
 
-            // Optimisation: vérifier si c'est une expression constante
-            $optimized = $this->constantFolder->fold($varName);
-
-            if ($optimized !== $varName && $this->constantFolder->isOptimizable($varName)) {
-                // Expression constante optimisée: insérer directement
-                $code .= "{$indent}// Constant folded: {$varName} -> {$optimized}\n";
-                $code .= "{$indent}\$__value = {$optimized};\n";
+            // Vérifier si contient des opérateurs math ou ternaire
+            if ($this->hasOperators($varName)) {
+                $escapedExpr = addcslashes($varName, "'\\");
+                $code .= "{$indent}\$__value = \$__helpers['evaluateExpression']('{$escapedExpr}', \$__variables);\n";
             } else {
-                // Variable dynamique: résolution normale
-                $code .= "{$indent}\$__value = \$__helpers['resolveVariable']('{$varName}', \$__variables);\n";
+                // Optimisation: vérifier si c'est une expression constante
+                $optimized = $this->constantFolder->fold($varName);
+
+                if ($optimized !== $varName && $this->constantFolder->isOptimizable($varName)) {
+                    // Expression constante optimisée: insérer directement
+                    $code .= "{$indent}// Constant folded: {$varName} -> {$optimized}\n";
+                    $code .= "{$indent}\$__value = {$optimized};\n";
+                } else {
+                    // Variable dynamique: résolution normale
+                    $code .= "{$indent}\$__value = \$__helpers['resolveVariable']('{$varName}', \$__variables);\n";
+                }
             }
 
             // Appliquer les filtres si présents
@@ -226,6 +232,18 @@ class TemplateCompiler
         }
 
         return $code;
+    }
+
+    /**
+     * Détecte si une expression contient des opérateurs
+     */
+    private function hasOperators(string $expr): bool
+    {
+        // Opérateurs math: +, -, *, /, %, **
+        // Ternaire: ? :
+        // Comparaisons: >, <, >=, <=, ==, !=, ===, !==
+        // Booléens: &&, ||, and, or
+        return preg_match('/[\+\-\*\/%\?:]|(\*\*)|[><=!&|]/', $expr) !== 0;
     }
 
     /**
