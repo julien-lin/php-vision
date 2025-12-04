@@ -31,6 +31,11 @@ class ExpressionEvaluator
     {
         $expression = trim($expression);
 
+        // Vérifier si c'est un test "is" (is defined, is null, is empty, is not...)
+        if (strpos($expression, ' is ') !== false) {
+            return $this->evaluateIsTest($expression, $variables);
+        }
+
         // Vérifier si c'est une expression ternaire
         if (strpos($expression, '?') !== false && strpos($expression, ':') !== false) {
             return $this->evaluateTernary($expression, $variables);
@@ -129,8 +134,8 @@ class ExpressionEvaluator
             function ($m) use ($variables) {
                 $varName = $m[1];
 
-                // Ne pas remplacer les opérateurs
-                if (in_array($varName, ['true', 'false', 'null', 'and', 'or', 'not', 'xor'], true)) {
+                // Ne pas remplacer les opérateurs et les mots-clés "is"
+                if (in_array($varName, ['true', 'false', 'null', 'and', 'or', 'not', 'xor', 'is', 'defined', 'empty'], true)) {
                     return $varName;
                 }
 
@@ -146,8 +151,13 @@ class ExpressionEvaluator
                 if (is_numeric($value)) {
                     return $value;
                 }
+                if (is_array($value)) {
+                    // Les arrays ne peuvent pas être utilisés dans eval()
+                    // Utiliser une représentation qui ne sera jamais nulle/vide pour eval
+                    return 'array()';
+                }
                 // String: l'échapper
-                return "'" . addcslashes($value, "'\\") . "'";
+                return "'" . addcslashes((string)$value, "'\\") . "'";
             },
             $segment
         );
@@ -184,5 +194,51 @@ class ExpressionEvaluator
         } else {
             return $this->evaluateArithmetic($falseVal, $variables);
         }
+    }
+
+    /**
+     * Évalue les tests "is": is defined, is null, is empty, is not...
+     */
+    private function evaluateIsTest(string $expr, array $variables): mixed
+    {
+        // Parser "is not" ou "is"
+        if (preg_match('/^(.+?)\s+(is\s+not)\s+(\w+)(.*)$/', $expr, $m)) {
+            $varPart = trim($m[1]);
+            $test = trim($m[3]);
+            $rest = trim($m[4]);
+            $negate = true;
+        } elseif (preg_match('/^(.+?)\s+is\s+(\w+)(.*)$/', $expr, $m)) {
+            $varPart = trim($m[1]);
+            $test = trim($m[2]);
+            $rest = trim($m[3]);
+            $negate = false;
+        } else {
+            return false;
+        }
+
+        // Obtenir la valeur de la variable
+        $value = $this->resolver->resolve($variables, $varPart);
+
+        // Évaluer le test
+        $result = match ($test) {
+            'defined' => $this->resolver->isDefined($variables, $varPart),
+            'null' => $value === null,
+            'empty' => empty($value),
+            default => false,
+        };
+
+        // Appliquer la négation si nécessaire
+        if ($negate) {
+            $result = !$result;
+        }
+
+        // S'il y a du reste (ex: "? 'yes' : 'no'"), l'évaluer comme ternaire
+        if (!empty($rest)) {
+            // Ajouter le résultat du test à l'expression ternaire
+            $ternaryExpr = ($result ? '1' : '0') . $rest;
+            return $this->evaluateTernary($ternaryExpr, $variables);
+        }
+
+        return $result;
     }
 }
