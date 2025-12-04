@@ -270,6 +270,72 @@ class Vision
             // On retourne le contenu brut car il a déjà été rendu/échappé
             return new SafeString($content);
         });
+
+        // Date formatting function with named parameters
+        // Usage: {{ date(format="Y-m-d") }} or {{ date(format="Y-m-d", timezone="UTC") }}
+        $this->registerFunction('date', function (...$args) {
+            $format = 'Y-m-d H:i:s';
+            
+            // Handle positional and named parameters
+            $namedParams = [];
+            if (!empty($args) && is_array($args[count($args) - 1])) {
+                $lastArg = $args[count($args) - 1];
+                // Check if it's an associative array (named params)
+                if (!array_is_list($lastArg)) {
+                    $namedParams = array_pop($args);
+                }
+            }
+            
+            // Get format from positional or named parameters
+            if (!empty($args)) {
+                $format = (string)$args[0];
+            } elseif (isset($namedParams['format'])) {
+                $format = (string)$namedParams['format'];
+            }
+            
+            $value = time(); // Default to current time
+            if (isset($namedParams['time'])) {
+                $value = $namedParams['time'];
+            }
+            
+            if (is_numeric($value)) {
+                return date($format, (int)$value);
+            }
+            if (is_string($value)) {
+                $timestamp = strtotime($value);
+                return $timestamp !== false ? date($format, $timestamp) : (string)$value;
+            }
+            if ($value instanceof \DateTimeInterface) {
+                return $value->format($format);
+            }
+            
+            return (string)$value;
+        });
+
+        // Text output function with named parameters
+        // Usage: {{ text(value=message) }} or {{ text("Hello") }}
+        $this->registerFunction('text', function (...$args) {
+            $value = '';
+            
+            // Handle positional and named parameters
+            $namedParams = [];
+            if (!empty($args) && is_array($args[count($args) - 1])) {
+                $lastArg = $args[count($args) - 1];
+                // Check if it's an associative array (named params)
+                if (!array_is_list($lastArg)) {
+                    $namedParams = array_pop($args);
+                }
+            }
+            
+            // Get value from positional or named parameters
+            if (!empty($args)) {
+                $value = $args[0];
+            } elseif (isset($namedParams['value'])) {
+                $value = $namedParams['value'];
+            }
+            
+            return (string)$value;
+        });
     }
 
     /**
@@ -895,6 +961,11 @@ class Vision
             return !empty($value) || $value === 0 || $value === '0';
         }
 
+        // Numeric literals (1, 0, 42, etc.)
+        if (is_numeric($condition)) {
+            return (int)$condition !== 0;
+        }
+
         // Négation
         if (preg_match(self::PATTERN_CONDITION_NEGATION, $condition, $matches)) {
             $value = $this->getNestedValue($variables, $matches[1]);
@@ -980,7 +1051,7 @@ class Vision
         if (preg_match(self::PATTERN_QUOTED_STRING, $variablePart, $matches)) {
             // C'est une chaîne littérale entre guillemets
             $value = $matches[1];
-            
+
             // Check if it's a double-quoted string (supports interpolation)
             $isDoubleQuoted = strpos($variablePart, '"') === 0;
             if ($isDoubleQuoted) {
@@ -1079,20 +1150,102 @@ class Vision
         }
 
         $params = [];
-        $parts = explode(',', $paramsString);
+        $namedParams = [];
+        $parts = $this->splitFunctionParams($paramsString);
+        
         foreach ($parts as $part) {
             $part = trim($part);
-            // Si c'est une chaîne entre guillemets
-            if (preg_match(self::PATTERN_QUOTED_STRING, $part, $matches)) {
-                $params[] = $matches[1];
-            } elseif (is_numeric($part)) {
-                $params[] = str_contains($part, '.') ? (float)$part : (int)$part;
+            
+            // Check if it's a named argument (key=value)
+            if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/', $part, $matches)) {
+                $key = strtolower($matches[1]); // Named arguments are case-insensitive
+                $value = trim($matches[2]);
+                
+                // Parse the value
+                if (preg_match(self::PATTERN_QUOTED_STRING, $value, $valueMatches)) {
+                    $extractedValue = $valueMatches[1];
+                    // Check if it's double-quoted (supports interpolation)
+                    if (strpos($value, '"') === 0) {
+                        $extractedValue = $this->interpolateString($extractedValue, $variables);
+                    }
+                    $namedParams[$key] = $extractedValue;
+                } elseif (is_numeric($value)) {
+                    $namedParams[$key] = str_contains($value, '.') ? (float)$value : (int)$value;
+                } else {
+                    // Variable or expression
+                    $namedParams[$key] = $this->getNestedValue($variables, $value);
+                }
             } else {
-                // Variable
-                $params[] = $this->getNestedValue($variables, $part);
+                // Positional argument
+                if (preg_match(self::PATTERN_QUOTED_STRING, $part, $matches)) {
+                    $extractedValue = $matches[1];
+                    // Check if it's double-quoted (supports interpolation)
+                    if (strpos($part, '"') === 0) {
+                        $extractedValue = $this->interpolateString($extractedValue, $variables);
+                    }
+                    $params[] = $extractedValue;
+                } elseif (is_numeric($part)) {
+                    $params[] = str_contains($part, '.') ? (float)$part : (int)$part;
+                } else {
+                    // Variable
+                    $params[] = $this->getNestedValue($variables, $part);
+                }
             }
         }
+        
+        // Merge positional and named parameters
+        // Named parameters go to the end as an associative array
+        if (!empty($namedParams)) {
+            $params[] = $namedParams;
+        }
+        
         return $params;
+    }
+
+    private function splitFunctionParams(string $paramsString): array
+    {
+        // Split by comma, but respect quoted strings and nested parentheses
+        $parts = [];
+        $current = '';
+        $inQuote = null;
+        $depth = 0;
+
+        for ($i = 0; $i < strlen($paramsString); $i++) {
+            $char = $paramsString[$i];
+            
+            // Handle quotes
+            if (($char === '"' || $char === "'") && ($i === 0 || $paramsString[$i - 1] !== '\\')) {
+                if ($inQuote === null) {
+                    $inQuote = $char;
+                } elseif ($inQuote === $char) {
+                    $inQuote = null;
+                }
+                $current .= $char;
+            }
+            // Handle nested structures
+            elseif ($char === '(' || $char === '[') {
+                $depth++;
+                $current .= $char;
+            } elseif ($char === ')' || $char === ']') {
+                $depth--;
+                $current .= $char;
+            }
+            // Handle separator
+            elseif ($char === ',' && $inQuote === null && $depth === 0) {
+                if (!empty($current)) {
+                    $parts[] = trim($current);
+                }
+                $current = '';
+            } else {
+                $current .= $char;
+            }
+        }
+        
+        if (!empty($current)) {
+            $parts[] = trim($current);
+        }
+        
+        return $parts;
     }
 
     /**
@@ -1499,7 +1652,7 @@ class Vision
             },
             $str
         );
-        
+
         // Handle string interpolation: "Hello #{name}" -> "Hello World"
         // Pattern: #{variableName} or #{object.property} or #{array.0}
         $result = preg_replace_callback(
@@ -1512,12 +1665,12 @@ class Vision
             },
             $str
         );
-        
+
         // Restore escaped interpolations
         foreach ($escapedParts as $key => $val) {
             $result = str_replace($key, $val, $result);
         }
-        
+
         return $result;
     }
 }
