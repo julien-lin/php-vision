@@ -24,6 +24,9 @@ use JulienLinard\Vision\Filters\SliceFilter;
 use JulienLinard\Vision\Filters\JoinFilter;
 use JulienLinard\Vision\Filters\SortFilter;
 use JulienLinard\Vision\Filters\ReverseFilter;
+use JulienLinard\Vision\Filters\BatchFilter;
+use JulienLinard\Vision\Filters\FilterFilter;
+use JulienLinard\Vision\Filters\MapFilter;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Compiler\InheritanceResolver;
@@ -215,6 +218,10 @@ class Vision
         $this->registerFilter(new JoinFilter());
         $this->registerFilter(new SortFilter());
         $this->registerFilter(new ReverseFilter());
+        // Filtres pour tableaux
+        $this->registerFilter(new BatchFilter());
+        $this->registerFilter(new FilterFilter());
+        $this->registerFilter(new MapFilter());
     }
 
     /**
@@ -882,6 +889,7 @@ class Vision
             fn(string $c, array $v, int $d) => $this->renderString($c, $v, $d),
             fn(string $cond, array $v) => $this->evaluateCondition($cond, $v),
             fn(array $v, string $path) => $this->getNestedValue($v, $path),
+            fn(mixed $val, string $filter, array $v) => $this->applyFilterToValue($val, $filter, $v),
         );
     }
 
@@ -983,6 +991,57 @@ class Vision
         }
 
         return false;
+    }
+
+    /**
+     * Applique un filtre à une valeur (utilisé dans les boucles avec filtres)
+     * Supporte le format batch(2) ou batch:2
+     *
+     * @param mixed $value
+     * @param string $filter Nom du filtre avec paramètres (e.g., "batch(2)" ou "batch:2" ou "filter")
+     * @param array<string, mixed> $variables
+     * @return mixed
+     */
+    private function applyFilterToValue(mixed $value, string $filter, array $variables): mixed
+    {
+        try {
+            // Convert batch(2) format to batch:2 format for FilterManager
+            $filter = $this->convertFilterFormat($filter);
+            return $this->filterManager->apply($filter, $value);
+        } catch (InvalidFilterException) {
+            // Si le filtre n'existe pas, retourner la valeur inchangée
+            return $value;
+        }
+    }
+
+    /**
+     * Convertit le format batch(2) en batch:2 pour FilterManager
+     */
+    private function convertFilterFormat(string $filter): string
+    {
+        // Si le format est déjà batch:2, retourner tel quel
+        if (strpos($filter, ':') !== false) {
+            return $filter;
+        }
+
+        // Convertir batch(param1,param2) en batch:param1,param2
+        if (preg_match('/^(\w+)\((.*?)\)$/', $filter, $matches)) {
+            $filterName = $matches[1];
+            $paramsStr = $matches[2];
+            
+            // Nettoyer les paramètres: enlever les quotes
+            $params = [];
+            $parts = explode(',', $paramsStr);
+            foreach ($parts as $part) {
+                $part = trim($part);
+                $part = trim($part, '\'"');
+                $params[] = $part;
+            }
+            
+            return $filterName . ':' . implode(',', $params);
+        }
+
+        return $filter;
     }
 
     /**
@@ -1684,7 +1743,7 @@ class Vision
         // - {{- : strip whitespace on the LEFT (before the tag)
         // - -}} : strip whitespace on the RIGHT (after the tag)
         // Same for {% and %}
-        
+
         // Handle {{- : strip trailing whitespace on left, normalize to {{
         // Match: any content followed by spaces/newlines then {{-
         $content = preg_replace_callback(

@@ -10,13 +10,13 @@ class ControlStructureProcessor
     private const REGEX_ENDIF_TAG = '/{%\s*endif\s*%}/';
     private const REGEX_ELSE_TAG = '/{%\s*else\s*%}/';
 
-    public function process(string $content, array $variables, int $depth, callable $render, callable $evaluateCondition, callable $resolve): string
+    public function process(string $content, array $variables, int $depth, callable $render, callable $evaluateCondition, callable $resolve, ?callable $applyFilters = null): string
     {
         $maxIterations = 100;
         $iteration = 0;
         while ($iteration < $maxIterations) {
             $original = $content;
-            $content = $this->processForLoops($content, $variables, $depth, $render, $resolve);
+            $content = $this->processForLoops($content, $variables, $depth, $render, $resolve, $applyFilters);
             $content = $this->processIfConditions($content, $variables, $depth, $render, $evaluateCondition);
             if ($content === $original) {
                 break;
@@ -26,10 +26,12 @@ class ControlStructureProcessor
         return $content;
     }
 
-    private function processForLoops(string $content, array $variables, int $depth, callable $render, callable $resolve): string
+    private function processForLoops(string $content, array $variables, int $depth, callable $render, callable $resolve, ?callable $applyFilters = null): string
     {
-        // Match: for var in (array | range | number..number | number..number..step)
-        if (!preg_match('/{%\s*for\s+(\w+(?:\s*,\s*\w+)*)\s+in\s+([\w\-]+(?:\.\w+)*|(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?)\s*(?:if\s+(.+?))?\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
+        // Match: for var in (array | range | number..number | number..number..step | variable|filter)
+        // Support filters: array|batch(2), array|filter('arg'), etc.
+        // The filter pattern accepts: word chars, dots, pipes, colons, quotes, parens, commas, spaces
+        if (!preg_match('/{%\s*for\s+(\w+(?:\s*,\s*\w+)*)\s+in\s+([\w\-]+(?:\.\w+)*(?:\|[\w:\'",().\s]+)*|(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?)\s*(?:if\s+(.+?))?\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
             return $content;
         }
 
@@ -111,7 +113,21 @@ class ControlStructureProcessor
         if (preg_match('/^(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?$/', $arrayVar)) {
             $arrayValue = $this->parseRange($arrayVar, $variables);
         } else {
-            $arrayValue = $resolve($variables, $arrayVar);
+            // Check if arrayVar contains filters (e.g., items|batch(2)|filter)
+            if (strpos($arrayVar, '|') !== false && $applyFilters !== null) {
+                // Extract the base variable and filters
+                $parts = explode('|', $arrayVar);
+                $baseVar = trim(array_shift($parts));
+                $arrayValue = $resolve($variables, $baseVar);
+                
+                // Apply each filter in sequence
+                foreach ($parts as $filterPart) {
+                    $filterPart = trim($filterPart);
+                    $arrayValue = $applyFilters($arrayValue, $filterPart, $variables);
+                }
+            } else {
+                $arrayValue = $resolve($variables, $arrayVar);
+            }
         }
 
         $result = '';
