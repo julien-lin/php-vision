@@ -28,7 +28,8 @@ class ControlStructureProcessor
 
     private function processForLoops(string $content, array $variables, int $depth, callable $render, callable $resolve): string
     {
-        if (!preg_match('/{%\s*for\s+(\w+(?:\s*,\s*\w+)*)\s+in\s+(\w+(?:\.\w+)*)\s*(?:if\s+(.+?))?\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
+        // Match: for var in (array | range | number..number | number..number..step)
+        if (!preg_match('/{%\s*for\s+(\w+(?:\s*,\s*\w+)*)\s+in\s+([\w\-]+(?:\.\w+)*|(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?)\s*(?:if\s+(.+?))?\s*%}/', $content, $matches, PREG_OFFSET_CAPTURE)) {
             return $content;
         }
 
@@ -106,7 +107,13 @@ class ControlStructureProcessor
         $loopContent = implode('', $loopContentParts);
         $elseContent = implode('', $elseContentParts);
 
-        $arrayValue = $resolve($variables, $arrayVar);
+        // Check if arrayVar is a range (e.g., 1..5, 0..10..2, start..end, -2..2)
+        if (preg_match('/^(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?$/', $arrayVar)) {
+            $arrayValue = $this->parseRange($arrayVar, $variables);
+        } else {
+            $arrayValue = $resolve($variables, $arrayVar);
+        }
+        
         $result = '';
         $hasItems = false;
 
@@ -175,11 +182,11 @@ class ControlStructureProcessor
             $op = $m[2];
             $val = (int)$m[3];
             $varVal = $variables[$var] ?? null;
-            
+
             if ($varVal === null) {
                 return false;
             }
-            
+
             return match ($op) {
                 '>' => $varVal > $val,
                 '<' => $varVal < $val,
@@ -191,6 +198,63 @@ class ControlStructureProcessor
             };
         }
         return true;
+    }
+
+    private function parseRange(string $rangeStr, array $variables): array
+    {
+        // Parse range strings like "1..5", "0..10..2", "start..end", "-2..2"
+        $parts = explode('..', $rangeStr);
+        
+        if (count($parts) < 2 || count($parts) > 3) {
+            return [];
+        }
+
+        // Get start value
+        $start = $this->resolveRangePart($parts[0], $variables);
+        if ($start === null) {
+            return [];
+        }
+
+        // Get end value
+        $end = $this->resolveRangePart($parts[1], $variables);
+        if ($end === null) {
+            return [];
+        }
+
+        // Get step if provided
+        $step = 1;
+        if (count($parts) === 3) {
+            $step = $this->resolveRangePart($parts[2], $variables);
+            if ($step === null || $step === 0) {
+                return [];
+            }
+        }
+
+        // Create range array
+        if ($step > 0 && $start <= $end) {
+            return range($start, $end, $step);
+        } elseif ($step < 0 && $start >= $end) {
+            return range($start, $end, $step);
+        } elseif ($step === 1 && $start <= $end) {
+            return range($start, $end);
+        }
+
+        return [];
+    }
+
+    private function resolveRangePart(string $part, array $variables): ?int
+    {
+        // Try to parse as integer first
+        if (is_numeric($part)) {
+            return (int)$part;
+        }
+
+        // Try to resolve as variable
+        if (isset($variables[$part]) && is_numeric($variables[$part])) {
+            return (int)$variables[$part];
+        }
+
+        return null;
     }
 
     private function processIfConditions(string $content, array $variables, int $depth, callable $render, callable $evaluateCondition): string

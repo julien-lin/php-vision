@@ -148,17 +148,17 @@ TPL;
 {% endif %}
 TPL;
         $this->createTemplate('test.html', $template);
-        
+
         // Test 1: show items with data
         $result = $this->vision->render('test.html', ['showItems' => true, 'items' => [1, 2]]);
         $this->assertStringContainsString('Item: 1', $result);
         $this->assertStringContainsString('Item: 2', $result);
         $this->assertStringNotContainsString('No items to display', $result);
-        
+
         // Test 2: show items without data
         $result = $this->vision->render('test.html', ['showItems' => true, 'items' => []]);
         $this->assertStringContainsString('No items to display', $result);
-        
+
         // Test 3: don't show items
         $result = $this->vision->render('test.html', ['showItems' => false, 'items' => [1, 2]]);
         $this->assertStringContainsString('Not showing items', $result);

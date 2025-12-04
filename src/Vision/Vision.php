@@ -833,6 +833,32 @@ class Vision
             return false;
         }
 
+        // Support pour l'opérateur "in" (e.g., "5 in 1..10")
+        if (preg_match('/^(.+?)\s+in\s+(.+)$/', $condition, $matches)) {
+            $valueStr = trim($matches[1]);
+            $rangeOrArray = trim($matches[2]);
+            
+            // Resolve value: either numeric literal or variable
+            if (is_numeric($valueStr)) {
+                $value = (int)$valueStr;
+            } else {
+                $valueExpr = $this->evaluateExpression($valueStr, $variables);
+                $value = is_numeric($valueExpr) ? (int)$valueExpr : $valueExpr;
+            }
+            
+            // Check if it's a range (e.g., "1..10", "0..20..2")
+            if (preg_match('/^(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?$/', $rangeOrArray)) {
+                $range = $this->parseRange($rangeOrArray, $variables);
+                return in_array($value, $range, true);
+            } else {
+                // It's an array variable
+                $arrayValue = $this->getNestedValue($variables, $rangeOrArray);
+                if (is_array($arrayValue)) {
+                    return in_array($value, $arrayValue, true);
+                }
+            }
+        }
+
         // Support pour les opérateurs simples
         if (preg_match(self::PATTERN_CONDITION_OPERATOR, $condition, $matches)) {
             $var = $this->getNestedValue($variables, $matches[1]);
@@ -1390,5 +1416,62 @@ class Vision
                 }
             }
         });
+    }
+
+    private function parseRange(string $rangeStr, array $variables): array
+    {
+        // Parse range strings like "1..5", "0..10..2", "start..end", "-2..2"
+        $parts = explode('..', $rangeStr);
+
+        if (count($parts) < 2 || count($parts) > 3) {
+            return [];
+        }
+
+        // Get start value
+        $start = $this->resolveRangePart($parts[0], $variables);
+        if ($start === null) {
+            return [];
+        }
+
+        // Get end value
+        $end = $this->resolveRangePart($parts[1], $variables);
+        if ($end === null) {
+            return [];
+        }
+
+        // Get step if provided
+        $step = 1;
+        if (count($parts) === 3) {
+            $step = $this->resolveRangePart($parts[2], $variables);
+            if ($step === null || $step === 0) {
+                return [];
+            }
+        }
+
+        // Create range array
+        if ($step > 0 && $start <= $end) {
+            return range($start, $end, $step);
+        } elseif ($step < 0 && $start >= $end) {
+            return range($start, $end, $step);
+        } elseif ($step === 1 && $start <= $end) {
+            return range($start, $end);
+        }
+
+        return [];
+    }
+
+    private function resolveRangePart(string $part, array $variables): ?int
+    {
+        // Try to parse as integer first
+        if (is_numeric($part)) {
+            return (int)$part;
+        }
+
+        // Try to resolve as variable
+        if (isset($variables[$part]) && is_numeric($variables[$part])) {
+            return (int)$variables[$part];
+        }
+
+        return null;
     }
 }
