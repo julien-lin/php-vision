@@ -18,6 +18,12 @@ use JulienLinard\Vision\Filters\DateFormatFilter;
 use JulienLinard\Vision\Filters\NumberFormatFilter;
 use JulienLinard\Vision\Filters\LengthFilter;
 use JulienLinard\Vision\Filters\JsonFilter;
+use JulienLinard\Vision\Filters\FirstFilter;
+use JulienLinard\Vision\Filters\LastFilter;
+use JulienLinard\Vision\Filters\SliceFilter;
+use JulienLinard\Vision\Filters\JoinFilter;
+use JulienLinard\Vision\Filters\SortFilter;
+use JulienLinard\Vision\Filters\ReverseFilter;
 use JulienLinard\Vision\Parser\TemplateParser;
 use JulienLinard\Vision\Compiler\TemplateCompiler;
 use JulienLinard\Vision\Compiler\InheritanceResolver;
@@ -202,6 +208,13 @@ class Vision
         $this->registerFilter(new NumberFormatFilter());
         $this->registerFilter(new LengthFilter());
         $this->registerFilter(new JsonFilter());
+        // Filtres avancés
+        $this->registerFilter(new FirstFilter());
+        $this->registerFilter(new LastFilter());
+        $this->registerFilter(new SliceFilter());
+        $this->registerFilter(new JoinFilter());
+        $this->registerFilter(new SortFilter());
+        $this->registerFilter(new ReverseFilter());
     }
 
     /**
