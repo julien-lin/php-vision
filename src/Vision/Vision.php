@@ -47,7 +47,7 @@ class Vision
      * Patterns regex précompilés pour améliorer les performances
      * Optimisés pour éviter ReDoS (limiter backtracking)
      */
-    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/+*%?&|!=<>]+?)\s*\}\}/';
+    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/+*%?&#{}!=<>\\\\]+?)\s*\}\}/';
     private const PATTERN_CONDITION_OPERATOR = '/^(\w+(?:\.\w+){0,10})\s*(==|!=|>=|<=|>|<)\s*([\w\s"\'.-]{0,200})$/';
     private const PATTERN_CONDITION_VARIABLE = '/^(\w+(?:\.\w+){0,10})$/';
     private const PATTERN_CONDITION_NEGATION = '/^!\s*(\w+(?:\.\w+){0,10})$/';
@@ -837,7 +837,7 @@ class Vision
         if (preg_match('/^(.+?)\s+in\s+(.+)$/', $condition, $matches)) {
             $valueStr = trim($matches[1]);
             $rangeOrArray = trim($matches[2]);
-            
+
             // Resolve value: either numeric literal or variable
             if (is_numeric($valueStr)) {
                 $value = (int)$valueStr;
@@ -845,7 +845,7 @@ class Vision
                 $valueExpr = $this->evaluateExpression($valueStr, $variables);
                 $value = is_numeric($valueExpr) ? (int)$valueExpr : $valueExpr;
             }
-            
+
             // Check if it's a range (e.g., "1..10", "0..20..2")
             if (preg_match('/^(?:\-?\d+|\w+)\.\.(?:\-?\d+|\w+)(?:\.\.(?:\-?\d+|\w+))?$/', $rangeOrArray)) {
                 $range = $this->parseRange($rangeOrArray, $variables);
@@ -976,9 +976,18 @@ class Vision
         $variablePart = trim(array_shift($parts) ?? '');
 
         // Obtenir la valeur de la variable ou chaîne littérale
+        $isDoubleQuoted = false;
         if (preg_match(self::PATTERN_QUOTED_STRING, $variablePart, $matches)) {
             // C'est une chaîne littérale entre guillemets
             $value = $matches[1];
+            
+            // Check if it's a double-quoted string (supports interpolation)
+            $isDoubleQuoted = strpos($variablePart, '"') === 0;
+            if ($isDoubleQuoted) {
+                // Double-quoted: perform interpolation
+                $value = $this->interpolateString($value, $variables);
+            }
+            // Single-quoted: no interpolation
         } elseif (is_numeric($variablePart)) {
             // C'est un nombre
             $value = str_contains($variablePart, '.') ? (float)$variablePart : (int)$variablePart;
@@ -1473,5 +1482,42 @@ class Vision
         }
 
         return null;
+    }
+
+    private function interpolateString(string $str, array $variables): string
+    {
+        // Handle escaped interpolation FIRST: \#{...} -> temporarily replace with placeholder
+        $escapedParts = [];
+        $counter = 0;
+        $str = preg_replace_callback(
+            '/\\\\#\{([a-zA-Z_][a-zA-Z0-9_\.]*)\}/',
+            function ($matches) use (&$escapedParts, &$counter) {
+                $key = '__ESCAPED_' . $counter . '__';
+                $counter++;
+                $escapedParts[$key] = '#{' . $matches[1] . '}';
+                return $key;
+            },
+            $str
+        );
+        
+        // Handle string interpolation: "Hello #{name}" -> "Hello World"
+        // Pattern: #{variableName} or #{object.property} or #{array.0}
+        $result = preg_replace_callback(
+            '/#\{([a-zA-Z_][a-zA-Z0-9_\.]*)\}/',
+            function ($matches) use ($variables) {
+                $path = $matches[1];
+                $value = $this->getNestedValue($variables, $path);
+                // Convert to string, empty string if null/undefined
+                return (string)($value ?? '');
+            },
+            $str
+        );
+        
+        // Restore escaped interpolations
+        foreach ($escapedParts as $key => $val) {
+            $result = str_replace($key, $val, $result);
+        }
+        
+        return $result;
     }
 }

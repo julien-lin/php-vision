@@ -113,7 +113,7 @@ class ControlStructureProcessor
         } else {
             $arrayValue = $resolve($variables, $arrayVar);
         }
-        
+
         $result = '';
         $hasItems = false;
 
@@ -204,7 +204,7 @@ class ControlStructureProcessor
     {
         // Parse range strings like "1..5", "0..10..2", "start..end", "-2..2"
         $parts = explode('..', $rangeStr);
-        
+
         if (count($parts) < 2 || count($parts) > 3) {
             return [];
         }
