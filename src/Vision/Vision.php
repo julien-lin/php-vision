@@ -47,7 +47,7 @@ class Vision
      * Patterns regex précompilés pour améliorer les performances
      * Optimisés pour éviter ReDoS (limiter backtracking)
      */
-    private const PATTERN_VARIABLE = '/\{\{\s*([a-zA-Z0-9_.|:"\'()\s,\-\/+*%?&#{}!=<>\\\\]+?)\s*\}\}/';
+    private const PATTERN_VARIABLE = '/\{\{-?\s*([a-zA-Z0-9_.|:"\'()\s,\-\/+*%?&#{}!=<>\\\\]+?)\s*-?\}\}/';
     private const PATTERN_CONDITION_OPERATOR = '/^(\w+(?:\.\w+){0,10})\s*(==|!=|>=|<=|>|<)\s*([\w\s"\'.-]{0,200})$/';
     private const PATTERN_CONDITION_VARIABLE = '/^(\w+(?:\.\w+){0,10})$/';
     private const PATTERN_CONDITION_NEGATION = '/^!\s*(\w+(?:\.\w+){0,10})$/';
@@ -275,7 +275,7 @@ class Vision
         // Usage: {{ date(format="Y-m-d") }} or {{ date(format="Y-m-d", timezone="UTC") }}
         $this->registerFunction('date', function (...$args) {
             $format = 'Y-m-d H:i:s';
-            
+
             // Handle positional and named parameters
             $namedParams = [];
             if (!empty($args) && is_array($args[count($args) - 1])) {
@@ -285,19 +285,19 @@ class Vision
                     $namedParams = array_pop($args);
                 }
             }
-            
+
             // Get format from positional or named parameters
             if (!empty($args)) {
                 $format = (string)$args[0];
             } elseif (isset($namedParams['format'])) {
                 $format = (string)$namedParams['format'];
             }
-            
+
             $value = time(); // Default to current time
             if (isset($namedParams['time'])) {
                 $value = $namedParams['time'];
             }
-            
+
             if (is_numeric($value)) {
                 return date($format, (int)$value);
             }
@@ -308,7 +308,7 @@ class Vision
             if ($value instanceof \DateTimeInterface) {
                 return $value->format($format);
             }
-            
+
             return (string)$value;
         });
 
@@ -316,7 +316,7 @@ class Vision
         // Usage: {{ text(value=message) }} or {{ text("Hello") }}
         $this->registerFunction('text', function (...$args) {
             $value = '';
-            
+
             // Handle positional and named parameters
             $namedParams = [];
             if (!empty($args) && is_array($args[count($args) - 1])) {
@@ -326,14 +326,14 @@ class Vision
                     $namedParams = array_pop($args);
                 }
             }
-            
+
             // Get value from positional or named parameters
             if (!empty($args)) {
                 $value = $args[0];
             } elseif (isset($namedParams['value'])) {
                 $value = $namedParams['value'];
             }
-            
+
             return (string)$value;
         });
     }
@@ -842,6 +842,9 @@ class Vision
             );
         }
 
+        // Process whitespace control FIRST to normalize tags and strip whitespace
+        $content = $this->processWhitespaceControl($content);
+
         // Traiter les structures de contrôle
         $content = $this->processControlStructures($content, $variables, $depth);
 
@@ -1152,15 +1155,15 @@ class Vision
         $params = [];
         $namedParams = [];
         $parts = $this->splitFunctionParams($paramsString);
-        
+
         foreach ($parts as $part) {
             $part = trim($part);
-            
+
             // Check if it's a named argument (key=value)
             if (preg_match('/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/', $part, $matches)) {
                 $key = strtolower($matches[1]); // Named arguments are case-insensitive
                 $value = trim($matches[2]);
-                
+
                 // Parse the value
                 if (preg_match(self::PATTERN_QUOTED_STRING, $value, $valueMatches)) {
                     $extractedValue = $valueMatches[1];
@@ -1192,13 +1195,13 @@ class Vision
                 }
             }
         }
-        
+
         // Merge positional and named parameters
         // Named parameters go to the end as an associative array
         if (!empty($namedParams)) {
             $params[] = $namedParams;
         }
-        
+
         return $params;
     }
 
@@ -1212,7 +1215,7 @@ class Vision
 
         for ($i = 0; $i < strlen($paramsString); $i++) {
             $char = $paramsString[$i];
-            
+
             // Handle quotes
             if (($char === '"' || $char === "'") && ($i === 0 || $paramsString[$i - 1] !== '\\')) {
                 if ($inQuote === null) {
@@ -1240,11 +1243,11 @@ class Vision
                 $current .= $char;
             }
         }
-        
+
         if (!empty($current)) {
             $parts[] = trim($current);
         }
-        
+
         return $parts;
     }
 
@@ -1672,5 +1675,61 @@ class Vision
         }
 
         return $result;
+    }
+
+    private function processWhitespaceControl(string $content): string
+    {
+        // Process whitespace control: {%- strips left, -%} strips right
+        // The - marker indicates stripping direction:
+        // - {{- : strip whitespace on the LEFT (before the tag)
+        // - -}} : strip whitespace on the RIGHT (after the tag)
+        // Same for {% and %}
+        
+        // Handle {{- : strip trailing whitespace on left, normalize to {{
+        // Match: any content followed by spaces/newlines then {{-
+        $content = preg_replace_callback(
+            '/(.*?)(?:[ \t]*\n[ \t]*|[ \t]+)\{\{-/',
+            function ($matches) {
+                $before = $matches[1];
+                // Keep the content but remove trailing whitespace
+                $before = rtrim($before);
+                return $before . '{{';
+            },
+            $content
+        );
+
+        // Handle -}} : strip leading whitespace on right, normalize to }}
+        // Strip whitespace immediately after the tag (space/newline/tab)
+        $content = preg_replace_callback(
+            '/-\}\}[ \t]*(?:\n[ \t]*)?/',
+            function ($matches) {
+                return '}}';
+            },
+            $content
+        );
+
+        // Handle {%- : strip trailing whitespace on left, normalize to {%
+        $content = preg_replace_callback(
+            '/(.*?)(?:[ \t]*\n[ \t]*|[ \t]+)\{%-/',
+            function ($matches) {
+                $before = $matches[1];
+                // Keep the content but remove trailing whitespace
+                $before = rtrim($before);
+                return $before . '{%';
+            },
+            $content
+        );
+
+        // Handle -%} : strip leading whitespace on right, normalize to %}
+        // Strip whitespace immediately after the tag (space/newline/tab)
+        $content = preg_replace_callback(
+            '/-%\}[ \t]*(?:\n[ \t]*)?/',
+            function ($matches) {
+                return '%}';
+            },
+            $content
+        );
+
+        return $content;
     }
 }
