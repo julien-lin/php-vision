@@ -112,4 +112,54 @@ class VariableResolver
     {
         $this->reflectionCache = [];
     }
+
+    /**
+     * Vérifie si une variable est définie dans le scope
+     */
+    public function isDefined(array $variables, string $path): bool
+    {
+        $parts = explode('.', $path);
+        $value = $variables;
+
+        foreach ($parts as $part) {
+            if (is_array($value)) {
+                if (!array_key_exists($part, $value)) {
+                    return false;
+                }
+                $value = $value[$part];
+            } elseif (is_object($value)) {
+                // Chercher la propriété ou la méthode getter
+                $getter = 'get' . ucfirst($part);
+                if (method_exists($value, $getter)) {
+                    $value = $value->$getter();
+                } elseif (method_exists($value, 'is' . ucfirst($part))) {
+                    $getter = 'is' . ucfirst($part);
+                    $value = $value->$getter();
+                } elseif (method_exists($value, '__get')) {
+                    $value = $value->$part;
+                } elseif (property_exists($value, $part)) {
+                    try {
+                        $reflection = new \ReflectionClass($value);
+                        $property = $reflection->getProperty($part);
+                        if ($property->isPublic()) {
+                            $value = $property->getValue($value);
+                        } else {
+                            if (PHP_VERSION_ID < 80100) {
+                                $property->setAccessible(true);
+                            }
+                            $value = $property->getValue($value);
+                        }
+                    } catch (\ReflectionException) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
