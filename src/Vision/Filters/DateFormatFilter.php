@@ -20,7 +20,21 @@ class DateFormatFilter extends AbstractFilter
             return '';
         }
 
-        $format = $params[0] ?? 'Y-m-d H:i:s';
+        // Extract named parameters if present
+        $namedParams = [];
+        if (!empty($params) && is_array($params[count($params) - 1])) {
+            $lastParam = $params[count($params) - 1];
+            if (array_is_list($params)) {
+                // It's a sequential array, last element is not named params
+                $format = $params[0] ?? 'Y-m-d H:i:s';
+            } else {
+                // Has associative keys, so it's named params
+                $namedParams = array_pop($params);
+                $format = $params[0] ?? $namedParams['format'] ?? 'Y-m-d H:i:s';
+            }
+        } else {
+            $format = $params[0] ?? 'Y-m-d H:i:s';
+        }
 
         if (is_numeric($value)) {
             return date($format, (int)$value);
