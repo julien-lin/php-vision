@@ -37,7 +37,7 @@ class BatchFilter implements FilterInterface
 
         for ($i = 0; $i < count($value); $i += $size) {
             $batch = array_slice($value, $i, $size);
-            
+
             // Pad the batch if fill is provided and batch is smaller than size
             if ($fill !== null && count($batch) < $size) {
                 $batch = array_pad($batch, $size, $fill);

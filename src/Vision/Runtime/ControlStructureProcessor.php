@@ -119,7 +119,7 @@ class ControlStructureProcessor
                 $parts = explode('|', $arrayVar);
                 $baseVar = trim(array_shift($parts));
                 $arrayValue = $resolve($variables, $baseVar);
-                
+
                 // Apply each filter in sequence
                 foreach ($parts as $filterPart) {
                     $filterPart = trim($filterPart);

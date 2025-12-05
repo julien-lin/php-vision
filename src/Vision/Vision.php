@@ -1028,7 +1028,7 @@ class Vision
         if (preg_match('/^(\w+)\((.*?)\)$/', $filter, $matches)) {
             $filterName = $matches[1];
             $paramsStr = $matches[2];
-            
+
             // Nettoyer les paramètres: enlever les quotes
             $params = [];
             $parts = explode(',', $paramsStr);
@@ -1037,7 +1037,7 @@ class Vision
                 $part = trim($part, '\'"');
                 $params[] = $part;
             }
-            
+
             return $filterName . ':' . implode(',', $params);
         }
 
