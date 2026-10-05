@@ -2,7 +2,7 @@
 
 [![Version PHP](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![Licence](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-230%20r%C3%A9ussis-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-427%20r%C3%A9ussis-success.svg)](tests/)
 
 [🇫🇷 Lire en français](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -19,7 +19,7 @@ Vision allie simplicité et performance de niveau entreprise grâce à son **pip
 - 🔒 **Sécurisé par Défaut** - Échappement automatique, protection path traversal, prévention XSS
 - 🎯 **Syntaxe Simple** - Variables `{{ var }}`, filtres `|upper`, structures `{% if %}`
 - 🏗️ **Architecture Modulaire** - 7 modules indépendants (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Entièrement Testé** - 230 tests, 486 assertions, couverture fonctionnelle 100%
+- 🧪 **Entièrement Testé** - 427 tests, 937 assertions, couverture fonctionnelle 100%
 - 🎨 **Extensible** - Filtres, fonctions et processeurs personnalisés
 - 📦 **Zéro Dépendance** - Autonome, aucun package externe requis
 - 💪 **PHP 8.0+** - PHP moderne avec typage strict

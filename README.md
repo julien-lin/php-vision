@@ -2,7 +2,7 @@
 
 [![PHP Version](https://img.shields.io/badge/php-%3E%3D8.0-8892BF.svg)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-294%20passed-success.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-427%20passed-success.svg)](tests/)
 
 [🇫🇷 Read in French](README.fr.md) | [🇬🇧 Read in English](README.md)
 
@@ -20,7 +20,7 @@ Vision combines simplicity with enterprise-grade performance through its **optio
 - 🔒 **Secure by Default** - Auto-escaping, path traversal protection, XSS prevention
 - 🎯 **Simple Syntax** - Variables `{{ var }}`, filters `|upper`, structures `{% if %}`
 - 🏛️ **Modular Architecture** - 7 independent modules (Parser, Compiler, Cache, Filters, Runtime)
-- 🧪 **Fully Tested** - 294 tests, 725 assertions, 100% functional coverage
+- 🧪 **Fully Tested** - 427 tests, 937 assertions, 100% functional coverage
 - 🎨 **Extensible** - Custom filters, functions, and processors
 - 📦 **Zero Dependencies** - Standalone, no external packages required
 - 💪 **PHP 8.0+** - Modern PHP with strict typing
